@@ -82,7 +82,7 @@ def get_counts() -> dict:
 st.sidebar.title("🔮 Prism Dashboard")
 page = st.sidebar.radio(
     "Navigation",
-    ["📊 Overview", "🛍️ Products", "🏪 Retailers", "🔗 Discovered URLs", "📋 Crawl Jobs", "🗑️ Clear Data"]
+    ["📊 Overview", "🛍️ Products", "🖼️ Images", "🏪 Retailers", "🔗 Discovered URLs", "📋 Crawl Jobs", "🗑️ Clear Data"]
 )
 
 # Overview Page
@@ -190,6 +190,55 @@ elif page == "🛍️ Products":
         st.download_button("📥 Download CSV", csv, "products.csv", "text/csv")
     else:
         st.info("No products found")
+
+
+# Images Page
+elif page == "🖼️ Images":
+    st.title("🖼️ Product Images")
+    
+    # Get image count
+    img_count = run_query("SELECT COUNT(*) as count FROM product_images")
+    total_images = int(img_count['count'].iloc[0]) if not img_count.empty else 0
+    
+    st.metric("Total Images", f"{total_images:,}")
+    
+    # Limit selector
+    limit = st.slider("Number of images to show", 10, 100, 30)
+    
+    # Fetch images with product info
+    images = run_query(f"""
+        SELECT 
+            pi.source_url,
+            pi.stored_url,
+            pi.width,
+            pi.height,
+            pi.alt_text,
+            p.title as product_title,
+            p.url as product_url
+        FROM product_images pi
+        LEFT JOIN products p ON pi.product_id = p.id
+        ORDER BY pi.created_at DESC
+        LIMIT {limit}
+    """)
+    
+    if not images.empty:
+        # Display images in a grid
+        cols_per_row = 6
+        
+        for i in range(0, len(images), cols_per_row):
+            cols = st.columns(cols_per_row)
+            for j, col in enumerate(cols):
+                idx = i + j
+                if idx < len(images):
+                    row = images.iloc[idx]
+                    img_url = row['stored_url'] or row['source_url']
+                    with col:
+                        try:
+                            st.image(img_url, width=100, caption=row['product_title'][:20] + "..." if row['product_title'] and len(row['product_title']) > 20 else row['product_title'])
+                        except:
+                            st.text("🖼️ Error")
+    else:
+        st.info("No images yet")
 
 
 # Retailers Page
