@@ -22,7 +22,7 @@ st.set_page_config(
     initial_sidebar_state="expanded"
 )
 
-# Custom CSS - Compact metrics
+# Custom CSS - Compact metrics + dataframe scrolling
 st.markdown("""
 <style>
     /* Remove card styling, make metrics compact */
@@ -39,6 +39,29 @@ st.markdown("""
     /* Compact the metric columns */
     div[data-testid="column"] {
         padding: 0 0.5rem !important;
+    }
+    /* Force horizontal scrollbar on dataframes */
+    div[data-testid="stDataFrame"] > div {
+        overflow-x: auto !important;
+    }
+    div[data-testid="stDataFrame"] iframe {
+        min-width: 100% !important;
+    }
+    /* Make sure scrollbar is always visible */
+    ::-webkit-scrollbar {
+        height: 10px;
+        width: 10px;
+    }
+    ::-webkit-scrollbar-track {
+        background: #f1f1f1;
+        border-radius: 5px;
+    }
+    ::-webkit-scrollbar-thumb {
+        background: #888;
+        border-radius: 5px;
+    }
+    ::-webkit-scrollbar-thumb:hover {
+        background: #555;
     }
 </style>
 """, unsafe_allow_html=True)
