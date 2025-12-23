@@ -201,7 +201,8 @@ elif page == "🛍️ Products":
     st.metric("Total Results", len(products))
     
     if not products.empty:
-        st.dataframe(products, use_container_width=True, height=600)
+        # Don't use use_container_width=True to enable horizontal scrolling
+        st.dataframe(products, height=600)
         
         # Download button
         csv = products.to_csv(index=False)
@@ -318,7 +319,7 @@ elif page == "💰 Price History":
         col2.metric("Avg Price", f"${prices['price'].mean():.2f}")
         col3.metric("Products with Discounts", len(prices[prices['original_price'].notna() & (prices['original_price'] > prices['price'])]))
         
-        st.dataframe(prices, use_container_width=True, height=500)
+        st.dataframe(prices, height=500)
         
         # Download button
         csv = prices.to_csv(index=False)
@@ -352,7 +353,7 @@ elif page == "🏪 Retailers":
     """)
     
     if not retailers.empty:
-        st.dataframe(retailers, use_container_width=True)
+        st.dataframe(retailers, height=400)
     else:
         st.info("No retailers yet")
 
@@ -413,7 +414,7 @@ elif page == "🔗 Discovered URLs":
         col3.metric("Product URLs", f"{int(stats['products'].iloc[0] or 0):,}")
     
     if not urls.empty:
-        st.dataframe(urls, use_container_width=True, height=500)
+        st.dataframe(urls, height=500)
     else:
         st.info("No discovered URLs yet")
 
@@ -454,7 +455,7 @@ elif page == "📋 Crawl Jobs":
         col3.metric("Failed", len(jobs[jobs['status'] == 'failed']))
         col4.metric("Products Found", int(jobs['products_found'].sum()))
         
-        st.dataframe(jobs, use_container_width=True, height=500)
+        st.dataframe(jobs, height=500)
     else:
         st.info("No crawl jobs yet")
 
