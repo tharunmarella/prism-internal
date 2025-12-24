@@ -167,7 +167,7 @@ elif page == "🛍️ Products":
     with col3:
         limit = st.number_input("Limit", min_value=10, max_value=1000, value=100)
     
-    # Build query - ALL fields
+    # Build query - ALL fields (excluding removed columns: upc, mpn)
     query = """
         SELECT 
             p.id,
@@ -184,9 +184,7 @@ elif page == "🛍️ Products":
             p.review_count,
             p.categories,
             p.tags,
-            p.upc,
             p.gtin,
-            p.mpn,
             p.description,
             p.url,
             p.canonical_url,
