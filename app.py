@@ -167,7 +167,7 @@ elif page == "🛍️ Products":
     with col3:
         has_price = st.checkbox("🏷️ Has Price", value=False)
     with col4:
-        limit = st.number_input("Limit", min_value=10, max_value=1000, value=100)
+        limit = st.number_input("Limit", min_value=10, max_value=100000, value=100)
     
     # Build query - ALL fields (excluding removed columns: upc, mpn)
     query = """
@@ -450,7 +450,7 @@ elif page == "💰 Price History":
     # Filters
     col1, col2 = st.columns(2)
     with col1:
-        limit = st.number_input("Limit", min_value=10, max_value=1000, value=100, key="price_limit")
+        limit = st.number_input("Limit", min_value=10, max_value=100000, value=100, key="price_limit")
     with col2:
         # Search by product title
         search_product = st.text_input("Search product (title)", "")
@@ -555,7 +555,7 @@ elif page == "🔗 Discovered URLs":
     with col2:
         extracted = st.selectbox("Extracted?", ["All", "Yes", "No"])
     with col3:
-        limit = st.number_input("Limit", min_value=10, max_value=1000, value=100, key="url_limit")
+        limit = st.number_input("Limit", min_value=10, max_value=100000, value=100, key="url_limit")
     
     query = """
         SELECT 
