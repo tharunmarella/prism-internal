@@ -267,10 +267,16 @@ elif page == "🏪 Store":
                 st.subheader(f"{p['brand']} | {p['retailer_name']}")
                 
                 # Price section
-                if p['original_price'] and p['original_price'] > p['price']:
-                    st.markdown(f"### <span style='color:red'>${p['price']:.2f}</span> <span style='text-decoration:line-through; font-size: 0.8em; color:gray'>${p['original_price']:.2f}</span>", unsafe_allow_html=True)
+                price = p['price']
+                orig_price = p['original_price']
+                
+                if price is not None:
+                    if orig_price and orig_price > price:
+                        st.markdown(f"### <span style='color:red'>${price:.2f}</span> <span style='text-decoration:line-through; font-size: 0.8em; color:gray'>${orig_price:.2f}</span>", unsafe_allow_html=True)
+                    else:
+                        st.markdown(f"### ${price:.2f}")
                 else:
-                    st.markdown(f"### ${p['price']:.2f}")
+                    st.markdown("### Price TBD")
                 
                 st.write(f"**SKU:** {p['retailer_sku']}")
                 st.write(f"**Availability:** {'✅ In Stock' if p['in_stock'] else '❌ Out of Stock'}")
@@ -357,10 +363,16 @@ elif page == "🏪 Store":
                             st.write(f"**{p['title'][:50]}...**" if len(p['title']) > 50 else f"**{p['title']}**")
                             st.write(f"{p['brand']}")
                             
-                            if p['original_price'] and p['original_price'] > p['price']:
-                                st.markdown(f"<span style='color:red'>${p['price']:.2f}</span> <span style='text-decoration:line-through; color:gray'>${p['original_price']:.2f}</span>", unsafe_allow_html=True)
+                            price = p['price']
+                            orig_price = p['original_price']
+                            
+                            if price is not None:
+                                if orig_price and orig_price > price:
+                                    st.markdown(f"<span style='color:red'>${price:.2f}</span> <span style='text-decoration:line-through; color:gray'>${orig_price:.2f}</span>", unsafe_allow_html=True)
+                                else:
+                                    st.write(f"${price:.2f}")
                             else:
-                                st.write(f"${p['price']:.2f}")
+                                st.write("Price TBD")
                             
                             if st.button("View Details", key=f"btn_{p['id']}"):
                                 st.session_state.selected_product_id = p['id']
@@ -474,8 +486,14 @@ elif page == "💰 Price History":
         col1.metric("Total Price Records", f"{int(total_prices['count'].iloc[0] or 0):,}")
     
     if not prices.empty:
-        col2.metric("Avg Price", f"${prices['price'].mean():.2f}")
-        col3.metric("Products with Discounts", len(prices[prices['original_price'].notna() & (prices['original_price'] > prices['price'])]))
+        avg_price = prices['price'].mean()
+        if pd.notna(avg_price):
+            col2.metric("Avg Price", f"${avg_price:.2f}")
+        else:
+            col2.metric("Avg Price", "N/A")
+            
+        discounted = prices[prices['original_price'].notna() & (prices['original_price'] > prices['price'])]
+        col3.metric("Products with Discounts", len(discounted))
         
         st.caption(f"Fields: {', '.join(prices.columns)}")
         st.dataframe(prices, height=500)
