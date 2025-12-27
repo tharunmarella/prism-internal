@@ -316,6 +316,9 @@ elif page == "🔍 Semantic Search":
     st.title("🔍 Semantic Search")
     st.caption("AI-powered product search using vector embeddings")
     
+    # API URL configuration
+    api_url = os.getenv("PRISM_API_URL", "http://localhost:8000")
+    
     # Search input
     search_query = st.text_input(
         "Search Query",
@@ -341,162 +344,89 @@ elif page == "🔍 Semantic Search":
         
         with st.spinner("Searching..."):
             try:
-                # Use prism-core vector_client
-                import sys
-                import os
-                sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..', 'prism-core')))
+                import requests
+                from urllib.parse import urlencode
                 
-                if search_mode == "semantic":
-                    # Pure semantic search
-                    from prism_core.services import vector_client
-                    import asyncio
+                # Call prism-api search endpoint
+                params = {
+                    "q": search_query,
+                    "mode": search_mode,
+                    "limit": limit
+                }
+                
+                response = requests.get(f"{api_url}/search?{urlencode(params)}", timeout=30)
+                
+                if response.status_code == 200:
+                    data = response.json()
+                    hits = data.get("hits", [])
                     
-                    async def search():
-                        return await vector_client.search_products(
-                            query=search_query,
-                            limit=limit,
-                            retailer_id=None
-                        )
-                    
-                    results = asyncio.run(search())
-                    
-                    # Fetch product details
-                    if results:
-                        product_ids = [r["product_id"] for r in results]
+                    if hits:
+                        st.success(f"✅ Found {data['total']} results in {data['processing_time_ms']}ms")
+                        st.caption(f"Search type: **{data['search_type']}**")
+                        
+                        # Fetch enriched_data for products
+                        product_ids = [h["id"] for h in hits]
                         product_ids_str = ",".join([f"'{pid}'" for pid in product_ids])
                         
-                        df = run_query(f"""
-                            SELECT 
-                                p.id,
-                                p.title,
-                                p.brand,
-                                p.price,
-                                p.currency,
-                                r.name as retailer,
-                                p.url,
-                                p.enriched_data
-                            FROM products p
-                            LEFT JOIN retailers r ON p.retailer_id = r.id
-                            WHERE p.id::text IN ({product_ids_str})
+                        enriched_df = run_query(f"""
+                            SELECT id::text, enriched_data
+                            FROM products
+                            WHERE id::text IN ({product_ids_str})
                         """)
+                        enriched_map = dict(zip(enriched_df["id"], enriched_df["enriched_data"]))
                         
-                        # Add scores
-                        scores = {r["product_id"]: r["score"] for r in results}
-                        df["similarity_score"] = df["id"].astype(str).map(scores)
-                        df = df.sort_values("similarity_score", ascending=False)
-                        
-                    else:
-                        df = pd.DataFrame()
-                
-                elif search_mode == "text":
-                    # Text search via Meilisearch
-                    from prism_core.services import search_client
-                    import asyncio
-                    
-                    async def search():
-                        return await search_client.search(
-                            query=search_query,
-                            limit=limit
-                        )
-                    
-                    meili_results = asyncio.run(search())
-                    
-                    if meili_results["hits"]:
-                        product_ids = [h["id"] for h in meili_results["hits"]]
-                        product_ids_str = ",".join([f"'{pid}'" for pid in product_ids])
-                        
-                        df = run_query(f"""
-                            SELECT 
-                                p.id,
-                                p.title,
-                                p.brand,
-                                p.price,
-                                p.currency,
-                                r.name as retailer,
-                                p.url,
-                                p.enriched_data
-                            FROM products p
-                            LEFT JOIN retailers r ON p.retailer_id = r.id
-                            WHERE p.id::text IN ({product_ids_str})
-                        """)
-                        
-                        # Add scores
-                        scores = {h["id"]: h.get("_rankingScore", 0) for h in meili_results["hits"]}
-                        df["text_score"] = df["id"].astype(str).map(scores)
-                        df = df.sort_values("text_score", ascending=False)
-                    else:
-                        df = pd.DataFrame()
-                
-                else:  # hybrid
-                    # Get semantic results first
-                    from prism_core.services import vector_client
-                    import asyncio
-                    
-                    async def search():
-                        return await vector_client.search_products(
-                            query=search_query,
-                            limit=limit * 2,  # Get more for filtering
-                            retailer_id=None
-                        )
-                    
-                    results = asyncio.run(search())
-                    
-                    if results:
-                        product_ids = [r["product_id"] for r in results]
-                        product_ids_str = ",".join([f"'{pid}'" for pid in product_ids])
-                        
-                        df = run_query(f"""
-                            SELECT 
-                                p.id,
-                                p.title,
-                                p.brand,
-                                p.price,
-                                p.currency,
-                                r.name as retailer,
-                                p.url,
-                                p.enriched_data
-                            FROM products p
-                            LEFT JOIN retailers r ON p.retailer_id = r.id
-                            WHERE p.id::text IN ({product_ids_str})
-                            LIMIT {limit}
-                        """)
-                        
-                        scores = {r["product_id"]: r["score"] for r in results}
-                        df["similarity_score"] = df["id"].astype(str).map(scores)
-                        df = df.sort_values("similarity_score", ascending=False)
-                    else:
-                        df = pd.DataFrame()
-                
-                # Display results
-                if not df.empty:
-                    st.success(f"✅ Found {len(df)} results")
-                    
-                    # Show results as cards
-                    for idx, row in df.iterrows():
-                        with st.expander(f"**{row['title']}** - {row['brand'] or 'Unknown Brand'}", expanded=(idx == 0)):
-                            col1, col2 = st.columns([3, 1])
-                            
-                            with col1:
-                                st.write(f"**Retailer:** {row['retailer']}")
-                                st.write(f"**Price:** {row['price']} {row['currency']}")
+                        # Display results as cards
+                        for idx, hit in enumerate(hits):
+                            with st.expander(
+                                f"**{hit['title']}** - {hit['brand'] or 'Unknown Brand'}", 
+                                expanded=(idx == 0)
+                            ):
+                                col1, col2 = st.columns([3, 1])
                                 
-                                score_col = "similarity_score" if "similarity_score" in df.columns else "text_score"
-                                if score_col in df.columns and pd.notna(row[score_col]):
-                                    st.write(f"**Match Score:** {row[score_col]:.3f}")
+                                with col1:
+                                    st.write(f"**Retailer:** {hit['retailer']}")
+                                    if hit.get('price'):
+                                        st.write(f"**Price:** ${hit['price']:.2f}")
+                                    if hit.get('in_stock') is not None:
+                                        stock_emoji = "✅" if hit['in_stock'] else "❌"
+                                        st.write(f"**In Stock:** {stock_emoji}")
+                                    
+                                    st.write(f"**Match Score:** {hit['score']:.3f}")
+                                    st.write(f"[🔗 View Product]({hit['url']})")
+                                    
+                                    # Show semantic summary if available
+                                    enriched = enriched_map.get(hit['id'])
+                                    if enriched and isinstance(enriched, dict):
+                                        summary = enriched.get('semantic_summary')
+                                        if summary:
+                                            st.info(f"**AI Description:** {summary}")
+                                        
+                                        # Show key features
+                                        features = enriched.get('key_features')
+                                        if features:
+                                            st.write("**Key Features:**")
+                                            for feature in features[:3]:
+                                                st.write(f"  • {feature}")
                                 
-                                st.write(f"[🔗 View Product]({row['url']})")
-                                
-                                # Show semantic summary if available
-                                if pd.notna(row['enriched_data']) and isinstance(row['enriched_data'], dict):
-                                    summary = row['enriched_data'].get('semantic_summary')
-                                    if summary:
-                                        st.info(f"**AI Description:** {summary}")
-                            
-                            with col2:
-                                st.caption(f"ID: {row['id']}")
+                                with col2:
+                                    if hit.get('image_url'):
+                                        try:
+                                            st.image(hit['image_url'], width=150)
+                                        except:
+                                            st.caption("Image unavailable")
+                                    st.caption(f"ID: `{hit['id'][:8]}...`")
+                    else:
+                        st.warning("No results found")
+                        st.info("💡 Try:\n- Different keywords\n- More general terms\n- Semantic mode for natural language")
+                
                 else:
-                    st.warning("No results found")
+                    st.error(f"API Error: {response.status_code}")
+                    st.code(response.text)
                     
+            except requests.exceptions.ConnectionError:
+                st.error("❌ Cannot connect to prism-api")
+                st.info(f"Make sure prism-api is running at: **{api_url}**")
+                st.code(f"Set PRISM_API_URL environment variable if using different URL")
             except Exception as e:
                 st.error(f"Search error: {e}")
                 import traceback
