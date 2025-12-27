@@ -317,7 +317,7 @@ elif page == "🔍 Semantic Search":
     st.caption("AI-powered product search using vector embeddings")
     
     # API URL configuration
-    api_url = os.getenv("PRISM_API_URL", "http://localhost:8000")
+    api_url = os.getenv("PRISM_API_URL", "https://prism-api-production.up.railway.app")
     
     # Search input
     search_query = st.text_input(
