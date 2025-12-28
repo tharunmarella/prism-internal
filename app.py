@@ -456,6 +456,8 @@ elif page == "📤 Batch Scrape":
     with tab2:
         st.subheader("Active Batches")
         
+        api_url = os.getenv("PRISM_API_URL", "https://prism-api-production.up.railway.app")
+        
         # Auto-refresh
         col1, col2 = st.columns([3, 1])
         with col2:
@@ -469,6 +471,8 @@ elif page == "📤 Batch Scrape":
         batch_keys = list(r.scan_iter("prism:batch:*"))
         
         if batch_keys:
+            import requests
+            
             for key in sorted(batch_keys, reverse=True)[:20]:  # Show latest 20
                 try:
                     batch_data = json.loads(r.get(key) or "{}")
@@ -481,44 +485,29 @@ elif page == "📤 Batch Scrape":
                     total = len(domains) if domains else batch_data.get("total", 0)
                     started_at = batch_data.get("started_at", "")
                     
-                    # Query database for actual job status
+                    # Query API for actual job status
                     completed = 0
                     failed = 0
                     running = 0
-                    pending = 0
+                    pending = total
                     products_total = 0
                     
                     if domains:
-                        # Build query for these domains
-                        domain_patterns = [f"%{d}%" for d in domains[:50]]  # Limit to 50 for query
-                        
-                        engine = get_db_engine()
-                        with engine.connect() as conn:
-                            for domain in domains:
-                                result = conn.execute(text(f"""
-                                    SELECT status, products_found 
-                                    FROM crawl_jobs 
-                                    WHERE base_url LIKE :pattern
-                                    ORDER BY created_at DESC 
-                                    LIMIT 1
-                                """), {"pattern": f"%{domain}%"})
-                                row = result.fetchone()
-                                
-                                if row:
-                                    status = row[0]
-                                    products = row[1] or 0
-                                    
-                                    if status == "completed":
-                                        completed += 1
-                                        products_total += products
-                                    elif status == "failed":
-                                        failed += 1
-                                    elif status in ("running", "queued"):
-                                        running += 1
-                                    else:
-                                        pending += 1
-                                else:
-                                    pending += 1
+                        try:
+                            resp = requests.post(
+                                f"{api_url}/api/v1/jobs/batch/status",
+                                json={"domains": domains[:100]},  # Limit to 100
+                                timeout=10
+                            )
+                            if resp.status_code == 200:
+                                status_data = resp.json()
+                                completed = status_data.get("completed", 0)
+                                running = status_data.get("running", 0)
+                                failed = status_data.get("failed", 0)
+                                pending = status_data.get("pending", total)
+                                products_total = status_data.get("products_total", 0)
+                        except Exception as e:
+                            st.caption(f"⚠️ Could not fetch status: {e}")
                     
                     # Calculate percent
                     percent = (completed / total * 100) if total > 0 else 0
