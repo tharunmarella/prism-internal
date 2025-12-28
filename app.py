@@ -8,13 +8,35 @@ Run:
 """
 
 import os
+import sys
 import json
+import logging
 from datetime import datetime
 
 import pandas as pd
 import redis
 import streamlit as st
 from sqlalchemy import create_engine, text
+
+# =============================================================================
+# Configure Logging - Output to stdout for container visibility
+# =============================================================================
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s [%(levelname)s] %(name)s: %(message)s',
+    handlers=[
+        logging.StreamHandler(sys.stdout)
+    ]
+)
+logger = logging.getLogger("prism-dashboard")
+
+# Log startup
+logger.info("=" * 60)
+logger.info("Prism Dashboard starting...")
+logger.info(f"DATABASE_URL set: {bool(os.getenv('DATABASE_URL'))}")
+logger.info(f"REDIS_URL set: {bool(os.getenv('REDIS_URL'))}")
+logger.info(f"PRISM_API_URL: {os.getenv('PRISM_API_URL', 'https://prism-api-production.up.railway.app')}")
+logger.info("=" * 60)
 
 # Page config
 st.set_page_config(
@@ -58,14 +80,28 @@ st.markdown("""
 def get_db_engine():
     """Create database connection."""
     db_url = os.getenv("DATABASE_URL", "")
+    logger.info("Attempting to create database connection...")
+    
     if not db_url:
+        logger.error("DATABASE_URL environment variable not set!")
         st.error("❌ DATABASE_URL not set!")
         st.info("Set it in your environment or .env file")
         st.stop()
     
     # Convert async URL to sync for pandas
     sync_url = db_url.replace("postgresql+asyncpg://", "postgresql://")
-    return create_engine(sync_url)
+    
+    # Mask password for logging
+    masked_url = sync_url.split("@")[-1] if "@" in sync_url else sync_url
+    logger.info(f"Creating database engine for: {masked_url}")
+    
+    try:
+        engine = create_engine(sync_url)
+        logger.info("Database engine created successfully")
+        return engine
+    except Exception as e:
+        logger.exception(f"Failed to create database engine: {e}")
+        raise
 
 
 @st.cache_resource
@@ -73,8 +109,19 @@ def get_redis_client():
     """Create Redis connection."""
     redis_url = os.getenv("REDIS_URL", "")
     if not redis_url:
+        logger.warning("REDIS_URL not set, Redis features will be disabled")
         return None
-    return redis.from_url(redis_url, decode_responses=True)
+    
+    try:
+        logger.info("Creating Redis client...")
+        client = redis.from_url(redis_url, decode_responses=True)
+        # Test connection
+        client.ping()
+        logger.info("Redis connection successful")
+        return client
+    except Exception as e:
+        logger.exception(f"Failed to connect to Redis: {e}")
+        return None
 
 
 def get_queue_stats():
@@ -82,14 +129,18 @@ def get_queue_stats():
     import requests
     
     api_url = os.getenv("PRISM_API_URL", "https://prism-api-production.up.railway.app")
+    logger.debug(f"Fetching queue stats from {api_url}/queues/stats")
     
     try:
         resp = requests.get(f"{api_url}/queues/stats", timeout=5)
         if resp.status_code == 200:
             data = resp.json()
+            logger.debug(f"Queue stats received: {len(data.get('queues', {}))} queues")
             return data.get("queues", {})
-    except Exception:
-        pass
+        else:
+            logger.warning(f"Queue stats API returned status {resp.status_code}: {resp.text[:200]}")
+    except Exception as e:
+        logger.warning(f"Failed to fetch queue stats from API: {e}")
     
     # Fallback to empty stats
     return {q: {"pending": 0, "failed": 0} for q in ["orchestrate", "platform", "discover", "extract", "index", "price"]}
@@ -99,6 +150,7 @@ def get_dlq_jobs():
     """Get all jobs from Dramatiq Dead Letter Queues (.XQ)."""
     r = get_redis_client()
     if not r:
+        logger.debug("No Redis client available for DLQ jobs")
         return []
     
     queues = ["orchestrate", "platform", "discover", "extract", "index", "price"]
@@ -121,15 +173,16 @@ def get_dlq_jobs():
                         job['queue'] = queue
                         job['failed_at'] = datetime.fromtimestamp(timestamp / 1000)  # Dramatiq uses milliseconds
                         all_jobs.append(job)
-                except:
+                except Exception as e:
+                    logger.warning(f"Failed to parse DLQ message {msg_id} from {queue}: {e}")
                     all_jobs.append({
                         'queue': queue,
                         'message_id': msg_id,
                         'failed_at': datetime.fromtimestamp(timestamp / 1000),
-                        'error': 'Could not parse message'
+                        'error': f'Could not parse message: {e}'
                     })
-        except:
-            pass
+        except Exception as e:
+            logger.warning(f"Failed to fetch DLQ for queue {queue}: {e}")
     
     return sorted(all_jobs, key=lambda x: x.get('failed_at', datetime.min), reverse=True)
 
@@ -194,14 +247,19 @@ def get_active_jobs():
     import requests
     
     api_url = os.getenv("PRISM_API_URL", "https://prism-api-production.up.railway.app")
+    logger.debug(f"Fetching active jobs from {api_url}/queues/active-jobs")
     
     try:
         resp = requests.get(f"{api_url}/queues/active-jobs", timeout=5)
         if resp.status_code == 200:
             data = resp.json()
-            return data.get("jobs", [])
-    except Exception:
-        pass
+            jobs = data.get("jobs", [])
+            logger.debug(f"Got {len(jobs)} active jobs")
+            return jobs
+        else:
+            logger.warning(f"Active jobs API returned status {resp.status_code}")
+    except Exception as e:
+        logger.warning(f"Failed to fetch active jobs from API: {e}")
     
     return []
 
@@ -210,44 +268,65 @@ def get_redis_info():
     """Get Redis server info."""
     r = get_redis_client()
     if not r:
+        logger.debug("No Redis client available for info")
         return {}
     
     try:
         info = r.info()
-        return {
+        result = {
             "memory": info.get("used_memory_human", "N/A"),
             "clients": info.get("connected_clients", 0),
             "keys": r.dbsize(),
             "uptime": info.get("uptime_in_days", 0)
         }
-    except:
+        logger.debug(f"Redis info: {result}")
+        return result
+    except Exception as e:
+        logger.warning(f"Failed to get Redis info: {e}")
         return {}
 
 
 def run_query(query: str) -> pd.DataFrame:
     """Run a SQL query and return a DataFrame."""
     engine = get_db_engine()
+    # Log first 100 chars of query for debugging
+    query_preview = query.replace('\n', ' ')[:100]
+    logger.debug(f"Executing query: {query_preview}...")
+    
     try:
-        return pd.read_sql(query, engine)
+        result = pd.read_sql(query, engine)
+        logger.debug(f"Query returned {len(result)} rows")
+        return result
     except Exception as e:
+        logger.exception(f"Query failed: {e}\nQuery: {query[:500]}")
         st.error(f"Query error: {e}")
         return pd.DataFrame()
 
 
 def get_counts() -> dict:
     """Get counts of all main tables."""
+    logger.info("Fetching table counts...")
     engine = get_db_engine()
     counts = {}
     tables = ["products", "retailers", "discovered_urls", "crawl_jobs", "product_prices", "product_images"]
     
-    with engine.connect() as conn:
-        for table in tables:
-            try:
-                result = conn.execute(text(f"SELECT COUNT(*) FROM {table}"))
-                counts[table] = result.scalar()
-            except:
-                counts[table] = 0
+    try:
+        with engine.connect() as conn:
+            logger.debug("Database connection established for counts")
+            for table in tables:
+                try:
+                    result = conn.execute(text(f"SELECT COUNT(*) FROM {table}"))
+                    counts[table] = result.scalar()
+                    logger.debug(f"  {table}: {counts[table]} rows")
+                except Exception as e:
+                    logger.error(f"Failed to count table {table}: {e}")
+                    counts[table] = 0
+    except Exception as e:
+        logger.exception(f"Failed to connect to database for counts: {e}")
+        # Return zeros for all tables
+        counts = {table: 0 for table in tables}
     
+    logger.info(f"Table counts: {counts}")
     return counts
 
 
