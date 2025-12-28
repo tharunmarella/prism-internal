@@ -78,27 +78,21 @@ def get_redis_client():
 
 
 def get_queue_stats():
-    """Get stats for all Dramatiq queues."""
-    r = get_redis_client()
-    if not r:
-        return {}
+    """Get stats for all Dramatiq queues via prism-api."""
+    import requests
     
-    queues = ["orchestrate", "platform", "discover", "extract", "index", "price"]
-    stats = {}
+    api_url = os.getenv("PRISM_API_URL", "https://prism-api-production.up.railway.app")
     
-    for queue in queues:
-        # Dramatiq uses `dramatiq:{queue}` as the main queue (list)
-        # NOT `dramatiq:{queue}.msgs` which is a hash for message metadata
-        queue_key = f"dramatiq:{queue}"
-        dlq_key = f"dramatiq:{queue}.XQ"
-        try:
-            pending = r.llen(queue_key) if r.type(queue_key) == 'list' else 0
-            failed = r.zcard(dlq_key) if r.exists(dlq_key) else 0
-            stats[queue] = {"pending": pending, "failed": failed}
-        except:
-            stats[queue] = {"pending": 0, "failed": 0}
+    try:
+        resp = requests.get(f"{api_url}/queues/stats", timeout=5)
+        if resp.status_code == 200:
+            data = resp.json()
+            return data.get("queues", {})
+    except Exception:
+        pass
     
-    return stats
+    # Fallback to empty stats
+    return {q: {"pending": 0, "failed": 0} for q in ["orchestrate", "platform", "discover", "extract", "index", "price"]}
 
 
 def get_dlq_jobs():
@@ -196,35 +190,20 @@ def clear_dlq() -> int:
 
 
 def get_active_jobs():
-    """Get active jobs with progress."""
-    r = get_redis_client()
-    if not r:
-        return []
+    """Get active jobs with progress via prism-api."""
+    import requests
+    
+    api_url = os.getenv("PRISM_API_URL", "https://prism-api-production.up.railway.app")
     
     try:
-        # Scan for progress keys
-        progress_keys = list(r.scan_iter("prism:progress:*"))
-        jobs = []
-        
-        for key in progress_keys:
-            try:
-                data = r.hgetall(key)
-                if data:
-                    job_id = key.replace("prism:progress:", "")
-                    jobs.append({
-                        "job_id": job_id,
-                        "phase": data.get("phase", "unknown"),
-                        "current": int(data.get("current", 0)),
-                        "total": int(data.get("total", 0)),
-                        "percent": float(data.get("percent", 0)),
-                        "updated_at": data.get("updated_at", "")
-                    })
-            except:
-                pass
-        
-        return jobs
-    except:
-        return []
+        resp = requests.get(f"{api_url}/queues/active-jobs", timeout=5)
+        if resp.status_code == 200:
+            data = resp.json()
+            return data.get("jobs", [])
+    except Exception:
+        pass
+    
+    return []
 
 
 def get_redis_info():
