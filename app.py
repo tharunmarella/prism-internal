@@ -700,12 +700,12 @@ elif page == "🏪 Store":
                 st.subheader(f"{p['brand']} | {p['retailer_name']}")
                 
                 # Price section
-                price = p['price']
-                orig_price = p['original_price']
+                price = float(p['price']) if p['price'] is not None else None
+                orig_price = float(p['original_price']) if p['original_price'] is not None else None
                 
                 if price is not None:
                     if orig_price and orig_price > price:
-                        st.markdown(f"### <span style='color:red'>${price:.2f}</span> <span style='text-decoration:line-through; font-size: 0.8em; color:gray'>${orig_price:.2f}</span>", unsafe_allow_html=True)
+                        st.markdown(f"### :red[${price:.2f}] ~~${orig_price:.2f}~~")
                     else:
                         st.markdown(f"### ${price:.2f}")
                 else:
@@ -800,12 +800,12 @@ elif page == "🏪 Store":
                             st.write(f"**{p['title'][:50]}...**" if len(p['title']) > 50 else f"**{p['title']}**")
                             st.write(f"{p['brand']}")
                             
-                            price = p['price']
-                            orig_price = p['original_price']
+                            price = float(p['price']) if p['price'] is not None else None
+                            orig_price = float(p['original_price']) if p['original_price'] is not None else None
                             
                             if price is not None:
                                 if orig_price and orig_price > price:
-                                    st.markdown(f"<span style='color:red'>${price:.2f}</span> <span style='text-decoration:line-through; color:gray'>${orig_price:.2f}</span>", unsafe_allow_html=True)
+                                    st.markdown(f"**:red[${price:.2f}]** ~~${orig_price:.2f}~~")
                                 else:
                                     st.write(f"${price:.2f}")
                             else:
