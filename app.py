@@ -96,23 +96,28 @@ def get_db_engine():
     logger.info(f"Creating database engine for: {masked_url}")
     
     try:
-        # Add connection timeout and pool settings
+        # PgBouncer-compatible settings:
+        # - NullPool: Don't pool connections (let PgBouncer handle pooling)
+        # - use_native_hstore=False: Disable hstore OID lookup that breaks PgBouncer
+        from sqlalchemy.pool import NullPool
+        
         engine = create_engine(
             sync_url,
+            poolclass=NullPool,  # Let PgBouncer handle connection pooling
             connect_args={
-                "connect_timeout": 10,  # 10 second connection timeout
+                "connect_timeout": 10,
+                "options": "-c statement_timeout=30000",  # 30 second query timeout
             },
-            pool_pre_ping=True,  # Test connections before using
-            pool_size=5,
-            max_overflow=10,
-            pool_timeout=30,
+            # Disable features that don't work with PgBouncer transaction mode
+            use_native_hstore=False,
         )
-        logger.info("Database engine created successfully")
+        logger.info("Database engine created successfully (PgBouncer-compatible mode)")
         
         # Test the connection immediately
         logger.info("Testing database connection...")
         with engine.connect() as test_conn:
-            test_conn.execute(text("SELECT 1"))
+            result = test_conn.execute(text("SELECT 1"))
+            result.fetchone()
         logger.info("Database connection test PASSED")
         
         return engine
