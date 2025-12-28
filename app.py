@@ -99,6 +99,7 @@ def get_db_engine():
         # PgBouncer-compatible settings:
         # - NullPool: Don't pool connections (let PgBouncer handle pooling)
         # - use_native_hstore=False: Disable hstore OID lookup that breaks PgBouncer
+        # - No startup parameters in options (PgBouncer doesn't support them)
         from sqlalchemy.pool import NullPool
         
         engine = create_engine(
@@ -106,7 +107,6 @@ def get_db_engine():
             poolclass=NullPool,  # Let PgBouncer handle connection pooling
             connect_args={
                 "connect_timeout": 10,
-                "options": "-c statement_timeout=30000",  # 30 second query timeout
             },
             # Disable features that don't work with PgBouncer transaction mode
             use_native_hstore=False,
