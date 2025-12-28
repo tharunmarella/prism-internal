@@ -5,6 +5,11 @@ A Streamlit dashboard to monitor and explore the Prism database.
 
 Run:
     streamlit run dashboard/app.py
+    
+Environment Variables:
+    DATABASE_URL: PostgreSQL connection URL
+    REDIS_URL: Redis connection URL  
+    PRISM_API_URL: Prism API base URL
 """
 
 import os
@@ -16,7 +21,6 @@ from datetime import datetime
 import pandas as pd
 import redis
 import streamlit as st
-from sqlalchemy import create_engine, text
 
 # =============================================================================
 # Configure Logging - Output to stdout for container visibility
@@ -76,15 +80,17 @@ st.markdown("""
 """, unsafe_allow_html=True)
 
 
-@st.cache_resource
-def get_db_engine():
-    """Create database connection."""
-    # Use direct PostgreSQL URL (bypassing PgBouncer)
-    db_url = os.getenv(
-        "DATABASE_URL", 
-        "postgresql://postgres:BRekrvFMzlBZkuGrJogNBRVFnFQWLqZf@postgres.railway.internal:5432/railway"
-    )
-    logger.info("Attempting to create database connection...")
+def get_db_connection():
+    """
+    Get database connection using Streamlit's built-in st.connection.
+    
+    This handles:
+    - Connection pooling and management
+    - Automatic retries on connection failures
+    - Query result caching
+    - Secrets management
+    """
+    db_url = os.getenv("DATABASE_URL", "")
     
     if not db_url:
         logger.error("DATABASE_URL environment variable not set!")
@@ -92,30 +98,18 @@ def get_db_engine():
         st.info("Set it in your environment or .env file")
         st.stop()
     
-    # Convert async URL to sync for pandas
+    # Convert async URL to sync for SQLAlchemy
     sync_url = db_url.replace("postgresql+asyncpg://", "postgresql://")
+    # Also handle postgres:// scheme
+    if sync_url.startswith("postgres://"):
+        sync_url = sync_url.replace("postgres://", "postgresql://", 1)
     
     # Mask password for logging
     masked_url = sync_url.split("@")[-1] if "@" in sync_url else sync_url
-    logger.info(f"Creating database engine for: {masked_url}")
+    logger.info(f"Connecting to database: {masked_url}")
     
-    try:
-        # PgBouncer-compatible settings:
-        # - NullPool: Don't pool connections (let PgBouncer handle pooling)
-        from sqlalchemy.pool import NullPool
-        
-        engine = create_engine(
-            sync_url,
-            poolclass=NullPool,  # Let PgBouncer handle connection pooling
-            connect_args={
-                "connect_timeout": 10,
-            },
-        )
-        logger.info("Database engine created successfully (PgBouncer-compatible mode)")
-        return engine
-    except Exception as e:
-        logger.exception(f"Failed to create database engine: {e}")
-        raise
+    # Use st.connection with the URL - handles retries, pooling, caching
+    return st.connection("postgresql", type="sql", url=sync_url)
 
 
 @st.cache_resource
@@ -300,15 +294,21 @@ def get_redis_info():
         return {}
 
 
-def run_query(query: str) -> pd.DataFrame:
-    """Run a SQL query and return a DataFrame."""
-    engine = get_db_engine()
+def run_query(query: str, ttl: str = "1m") -> pd.DataFrame:
+    """
+    Run a SQL query and return a DataFrame.
+    
+    Uses st.connection which handles:
+    - Connection management and retries
+    - Query result caching (default 1 minute TTL)
+    """
     # Log first 100 chars of query for debugging
     query_preview = query.replace('\n', ' ')[:100]
     logger.debug(f"Executing query: {query_preview}...")
     
     try:
-        result = pd.read_sql(query, engine)
+        conn = get_db_connection()
+        result = conn.query(query, ttl=ttl)
         logger.debug(f"Query returned {len(result)} rows")
         return result
     except Exception as e:
@@ -318,23 +318,22 @@ def run_query(query: str) -> pd.DataFrame:
 
 
 def get_counts() -> dict:
-    """Get counts of all main tables."""
+    """Get counts of all main tables using st.connection."""
     logger.info("Fetching table counts...")
-    engine = get_db_engine()
     counts = {}
     tables = ["products", "retailers", "discovered_urls", "crawl_jobs", "product_prices", "product_images"]
     
     try:
-        with engine.connect() as conn:
-            logger.debug("Database connection established for counts")
-            for table in tables:
-                try:
-                    result = conn.execute(text(f"SELECT COUNT(*) FROM {table}"))
-                    counts[table] = result.scalar()
-                    logger.debug(f"  {table}: {counts[table]} rows")
-                except Exception as e:
-                    logger.error(f"Failed to count table {table}: {e}")
-                    counts[table] = 0
+        conn = get_db_connection()
+        for table in tables:
+            try:
+                # Use conn.query with short TTL for counts
+                result = conn.query(f"SELECT COUNT(*) as count FROM {table}", ttl="30s")
+                counts[table] = int(result['count'].iloc[0]) if not result.empty else 0
+                logger.debug(f"  {table}: {counts[table]} rows")
+            except Exception as e:
+                logger.error(f"Failed to count table {table}: {e}")
+                counts[table] = 0
     except Exception as e:
         logger.exception(f"Failed to connect to database for counts: {e}")
         # Return zeros for all tables
@@ -1414,13 +1413,16 @@ elif page == "🗑️ Clear Data":
         if tables_to_clear:
             confirm = st.checkbox(f"I confirm I want to delete data from: {', '.join(tables_to_clear)}")
             if confirm and st.button("🗑️ Clear Selected Tables", type="primary"):
-                engine = get_db_engine()
-                with engine.connect() as conn:
-                    for table in tables_to_clear:
-                        conn.execute(text(f"TRUNCATE TABLE {table} CASCADE"))
-                    conn.commit()
-                st.success(f"✅ Cleared: {', '.join(tables_to_clear)}")
-                st.rerun()
+                try:
+                    conn = get_db_connection()
+                    with conn.session as session:
+                        for table in tables_to_clear:
+                            session.execute(f"TRUNCATE TABLE {table} CASCADE")
+                        session.commit()
+                    st.success(f"✅ Cleared: {', '.join(tables_to_clear)}")
+                    st.rerun()
+                except Exception as e:
+                    st.error(f"Failed to clear tables: {e}")
     
     with col2:
         st.subheader("Clear All Data")
@@ -1428,25 +1430,28 @@ elif page == "🗑️ Clear Data":
         
         confirm_all = st.checkbox("I understand this will delete ALL data")
         if confirm_all and st.button("☢️ Clear All Tables", type="secondary"):
-            engine = get_db_engine()
-            with engine.connect() as conn:
-                # Order matters due to foreign keys
-                tables = [
-                    "product_images",
-                    "product_prices", 
-                    "products",
-                    "discovered_urls",
-                    "crawl_jobs",
-                    "retailers"
-                ]
-                for table in tables:
-                    try:
-                        conn.execute(text(f"TRUNCATE TABLE {table} CASCADE"))
-                    except Exception as e:
-                        st.warning(f"Could not clear {table}: {e}")
-                conn.commit()
-            st.success("✅ All tables cleared!")
-            st.rerun()
+            try:
+                conn = get_db_connection()
+                with conn.session as session:
+                    # Order matters due to foreign keys
+                    tables = [
+                        "product_images",
+                        "product_prices", 
+                        "products",
+                        "discovered_urls",
+                        "crawl_jobs",
+                        "retailers"
+                    ]
+                    for table in tables:
+                        try:
+                            session.execute(f"TRUNCATE TABLE {table} CASCADE")
+                        except Exception as e:
+                            st.warning(f"Could not clear {table}: {e}")
+                    session.commit()
+                st.success("✅ All tables cleared!")
+                st.rerun()
+            except Exception as e:
+                st.error(f"Failed to clear tables: {e}")
 
 
 # Footer
