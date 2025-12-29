@@ -184,15 +184,16 @@ def get_dlq_jobs():
             for msg in messages:
                 try:
                     payload = json.loads(msg["payload"])
-                    # Extract info from payload
+                    # Extract info from native RabbitMQ payload
                     job = {
-                        "id": payload.get("message_id"),
-                        "actor_name": payload.get("actor_name"),
-                        "args": payload.get("args"),
-                        "kwargs": payload.get("kwargs"),
-                        "retries": payload.get("options", {}).get("retries", 0),
-                        "failed_at": datetime.now(), # Management API doesn't give precise failure time easily
-                        "error": payload.get("options", {}).get("traceback", "No traceback available")
+                        "id": msg.get("properties", {}).get("message_id", "N/A"),
+                        "task": payload.get("task", "unknown"),
+                        "args": payload.get("args", []),
+                        "kwargs": payload.get("kwargs", {}),
+                        "timestamp": payload.get("timestamp"),
+                        "failed_at": datetime.now(), 
+                        "routing_key": msg.get("routing_key"),
+                        "exchange": msg.get("exchange")
                     }
                     jobs.append(job)
                 except Exception as e:
@@ -861,7 +862,7 @@ elif page == "📬 Queues":
     if dlq_jobs:
         # Show DLQ jobs as expandable
         for job in dlq_jobs[:20]:  # Limit to 20
-            with st.expander(f"❌ {job.get('actor', 'unknown')} - {job.get('failed_at', '')}"):
+            with st.expander(f"❌ {job.get('task', 'unknown')} - {job.get('failed_at', '')}"):
                 st.json(job)
     
     st.divider()
