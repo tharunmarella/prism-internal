@@ -341,7 +341,7 @@ def run_query(query: str, ttl: str = "1m") -> pd.DataFrame:
 
 
 def get_counts() -> dict:
-    """Get counts of all main tables using st.connection."""
+    """Get counts of all main tables and their 24h growth."""
     logger.info("Fetching table counts...")
     counts = {}
     tables = ["products", "retailers", "discovered_urls", "crawl_jobs", "product_prices", "product_images"]
@@ -350,19 +350,32 @@ def get_counts() -> dict:
         conn = get_db_connection()
         for table in tables:
             try:
-                # Use conn.query with short TTL for counts
-                result = conn.query(f"SELECT COUNT(*) as count FROM {table}", ttl="30s")
-                counts[table] = int(result['count'].iloc[0]) if not result.empty else 0
-                logger.debug(f"  {table}: {counts[table]} rows")
+                # Get total count
+                res_total = conn.query(f"SELECT COUNT(*) as count FROM {table}", ttl="30s")
+                total = int(res_total['count'].iloc[0]) if not res_total.empty else 0
+                
+                # Get last 24h count
+                # Map created_at column names
+                date_col = "created_at"
+                if table == "products":
+                    date_col = "first_seen_at"
+                elif table == "product_prices":
+                    date_col = "recorded_at"
+                elif table == "discovered_urls":
+                    date_col = "discovered_at"
+                
+                res_24h = conn.query(f"SELECT COUNT(*) as count FROM {table} WHERE {date_col} > NOW() - INTERVAL '24 hours'", ttl="1m")
+                recent = int(res_24h['count'].iloc[0]) if not res_24h.empty else 0
+                
+                counts[table] = {"total": total, "recent": recent}
+                logger.debug(f"  {table}: {total} total, {recent} in 24h")
             except Exception as e:
                 logger.error(f"Failed to count table {table}: {e}")
-                counts[table] = 0
+                counts[table] = {"total": 0, "recent": 0}
     except Exception as e:
         logger.exception(f"Failed to connect to database for counts: {e}")
-        # Return zeros for all tables
-        counts = {table: 0 for table in tables}
+        counts = {table: {"total": 0, "recent": 0} for table in tables}
     
-    logger.info(f"Table counts: {counts}")
     return counts
 
 
@@ -381,16 +394,62 @@ if page == "📊 Overview":
     
     # All metrics in one row
     col1, col2, col3, col4, col5, col6 = st.columns(6)
-    col1.metric("Products", f"{counts.get('products', 0):,}")
-    col2.metric("Retailers", f"{counts.get('retailers', 0):,}")
-    col3.metric("URLs", f"{counts.get('discovered_urls', 0):,}")
-    col4.metric("Jobs", f"{counts.get('crawl_jobs', 0):,}")
-    col5.metric("Prices", f"{counts.get('product_prices', 0):,}")
-    col6.metric("Images", f"{counts.get('product_images', 0):,}")
+    
+    def get_val(table):
+        data = counts.get(table, {"total": 0, "recent": 0})
+        return f"{data['total']:,}", f"+{data['recent']:,} (24h)"
+    
+    val1, delta1 = get_val('products')
+    col1.metric("Products", val1, delta=delta1)
+    
+    val2, delta2 = get_val('retailers')
+    col2.metric("Retailers", val2, delta=delta2)
+    
+    val3, delta3 = get_val('discovered_urls')
+    col3.metric("URLs", val3, delta=delta3)
+    
+    val4, delta4 = get_val('crawl_jobs')
+    col4.metric("Jobs", val4, delta=delta4)
+    
+    val5, delta5 = get_val('product_prices')
+    col5.metric("Prices", val5, delta=delta5)
+    
+    val6, delta6 = get_val('product_images')
+    col6.metric("Images", val6, delta=delta6)
     
     st.divider()
     
-    # Recent Products
+    # Growth & Success Rate
+    col1, col2 = st.columns([2, 1])
+    
+    with col1:
+        st.subheader("📈 Extraction Activity (Last 7 Days)")
+        activity = run_query("""
+            SELECT date_trunc('day', created_at) as day, count(*) as count
+            FROM crawl_jobs
+            WHERE created_at > NOW() - INTERVAL '7 days'
+            GROUP BY 1 ORDER BY 1
+        """, ttl="10m")
+        if not activity.empty:
+            activity['day'] = pd.to_datetime(activity['day']).dt.date
+            st.line_chart(activity.set_index('day'), height=250)
+        else:
+            st.info("Not enough data for activity chart")
+            
+    with col2:
+        st.subheader("🎯 Job Success Rate")
+        success_stats = run_query("""
+            SELECT status, count(*) as count 
+            FROM crawl_jobs 
+            WHERE created_at > NOW() - INTERVAL '24 hours'
+            GROUP BY status
+        """, ttl="5m")
+        if not success_stats.empty:
+            st.bar_chart(success_stats.set_index('status'), height=250)
+        else:
+            st.info("No jobs in last 24h")
+
+    st.divider()
     st.subheader("🕐 Recent Products")
     recent_products = run_query("""
         SELECT p.title, p.price, p.currency, r.name as retailer, p.url, p.first_seen_at
@@ -435,17 +494,26 @@ elif page == "📤 Batch Scrape":
                 
                 st.success(f"✅ Loaded {len(df)} rows")
                 
-                # Try to find domain column
+                # Try to find domain and platform columns
                 domain_col = None
+                platform_col = None
+                
                 for col in ["current_domain", "domain", "original_domain", "url"]:
                     if col in df.columns:
                         domain_col = col
                         break
                 
+                for col in ["platform", "engine", "type"]:
+                    if col in df.columns:
+                        platform_col = col
+                        break
+                
                 if not domain_col:
                     st.error(f"❌ No domain column found. Available columns: {list(df.columns)}")
                 else:
-                    st.info(f"Using column: **{domain_col}**")
+                    st.info(f"Using domain column: **{domain_col}**")
+                    if platform_col:
+                        st.info(f"Using platform column: **{platform_col}**")
                     
                     # Preview
                     st.write("**Preview (first 10 rows):**")
@@ -464,17 +532,30 @@ elif page == "📤 Batch Scrape":
                     
                     # Start button
                     if st.button("🚀 Start Batch Scrape", type="primary"):
-                        # Extract domains
-                        domains = df[domain_col].dropna().astype(str).tolist()[:limit]
-                        
-                        # Clean domains
+                        # Extract domains and platforms
+                        batch_items = []
                         cleaned_domains = []
-                        for d in domains:
-                            d = d.strip().replace("https://", "").replace("http://", "").rstrip("/")
-                            if d:
-                                cleaned_domains.append(d)
                         
-                        if not cleaned_domains:
+                        for _, row in df.head(limit).iterrows():
+                            domain = str(row[domain_col]).strip()
+                            domain = domain.replace("https://", "").replace("http://", "").rstrip("/")
+                            
+                            if not domain:
+                                continue
+                                
+                            platform = None
+                            if platform_col:
+                                val = str(row[platform_col]).strip().lower()
+                                if val in ["shopify", "woocommerce", "squarespace", "bigcommerce"]:
+                                    platform = val
+                            
+                            batch_items.append({
+                                "url": f"https://{domain}",
+                                "platform": platform
+                            })
+                            cleaned_domains.append(domain)
+                        
+                        if not batch_items:
                             st.error("No valid domains found!")
                         else:
                             # Create batch in Redis
@@ -484,11 +565,11 @@ elif page == "📤 Batch Scrape":
                             batch_data = {
                                 "batch_id": batch_id,
                                 "batch_name": batch_name,
-                                "total": len(cleaned_domains),
+                                "total": len(batch_items),
                                 "completed": 0,
                                 "failed": 0,
                                 "in_progress": 0,
-                                "pending": len(cleaned_domains),
+                                "pending": len(batch_items),
                                 "percent": 0,
                                 "started_at": datetime.now().isoformat(),
                                 "updated_at": datetime.now().isoformat(),
@@ -500,49 +581,45 @@ elif page == "📤 Batch Scrape":
                             
                             r.set(f"prism:batch:{batch_id}", json.dumps(batch_data), ex=60*60*24*7)  # 7 day TTL
                             
-                        # Queue each domain via prism-api
+                        # Queue each domain via prism-api batch endpoint
                         api_url = os.getenv("PRISM_API_URL", "https://prism-api-production.up.railway.app")
-                        queued = 0
-                        errors = []
                         
                         import requests
                         
-                        progress_bar = st.progress(0, text="Queuing stores...")
-                        
-                        for i, domain in enumerate(cleaned_domains):
-                            try:
-                                url = f"https://{domain}"
+                        try:
+                            with st.spinner("🚀 Queuing batch..."):
                                 resp = requests.post(
-                                    f"{api_url}/api/v1/jobs",
-                                    json={"url": url},
-                                    timeout=10
+                                    f"{api_url}/api/v1/jobs/batch",
+                                    json={"items": batch_items},
+                                    timeout=30
                                 )
+                                
                                 if resp.status_code in (200, 201):
-                                    queued += 1
+                                    data = resp.json()
+                                    queued = data.get("jobs_created", 0)
+                                    errors = data.get("errors", [])
+                                    
+                                    if queued > 0:
+                                        st.success(f"✅ Queued {queued}/{len(batch_items)} stores! Batch ID: `{batch_id}`")
+                                        
+                                        # Update batch status in Redis for tracking
+                                        batch_data["status"] = "running"
+                                        batch_data["in_progress"] = queued
+                                        batch_data["pending"] = len(batch_items) - queued
+                                        r.set(f"prism:batch:{batch_id}", json.dumps(batch_data), ex=60*60*24*7)
+                                        
+                                        st.info("Switch to the **Monitor Batches** tab to track progress.")
+                                    
+                                    if errors:
+                                        with st.expander(f"⚠️ {len(errors)} errors"):
+                                            for err in errors[:20]:
+                                                st.text(err)
                                 else:
-                                    errors.append(f"{domain}: HTTP {resp.status_code}")
-                            except Exception as e:
-                                errors.append(f"{domain}: {str(e)}")
-                            
-                            # Update progress
-                            progress_bar.progress((i + 1) / len(cleaned_domains), text=f"Queuing {i+1}/{len(cleaned_domains)}...")
-                        
-                        # Update batch status
-                        batch_data["status"] = "running"
-                        batch_data["in_progress"] = queued
-                        batch_data["pending"] = len(cleaned_domains) - queued
-                        r.set(f"prism:batch:{batch_id}", json.dumps(batch_data), ex=60*60*24*7)
-                        
-                        progress_bar.empty()
-                        
-                        if queued > 0:
-                            st.success(f"✅ Queued {queued}/{len(cleaned_domains)} stores! Batch ID: `{batch_id}`")
-                            st.info("Switch to the **Monitor Batches** tab to track progress.")
-                        
-                        if errors:
-                            with st.expander(f"⚠️ {len(errors)} errors"):
-                                for err in errors[:20]:
-                                    st.text(err)
+                                    st.error(f"❌ API Error: {resp.status_code}")
+                                    st.code(resp.text)
+                                    
+                        except Exception as e:
+                            st.error(f"❌ Failed to contact API: {e}")
                     
             except Exception as e:
                 st.error(f"Failed to read CSV: {e}")
@@ -590,8 +667,8 @@ elif page == "📤 Batch Scrape":
                         try:
                             resp = requests.post(
                                 f"{api_url}/api/v1/jobs/batch/status",
-                                json={"domains": domains[:100]},  # Limit to 100
-                                timeout=10
+                                json={"domains": domains},  # Check all domains in batch
+                                timeout=20
                             )
                             if resp.status_code == 200:
                                 status_data = resp.json()
@@ -1255,15 +1332,18 @@ elif page == "💰 Price History":
     if not total_prices.empty:
         col1.metric("Total Price Records", f"{int(total_prices['count'].iloc[0] or 0):,}")
     
-    if not prices.empty:
-        avg_price = prices['price'].mean()
-        if pd.notna(avg_price):
-            col2.metric("Avg Price", f"${avg_price:.2f}")
-        else:
-            col2.metric("Avg Price", "N/A")
+    # Global Avg Price
+    avg_res = run_query("SELECT AVG(price) as avg_price FROM product_prices")
+    global_avg = avg_res['avg_price'].iloc[0] if not avg_res.empty else None
+    if global_avg:
+        col2.metric("Avg Price (Global)", f"${float(global_avg):.2f}")
+    else:
+        col2.metric("Avg Price", "N/A")
             
+    # Discount count in current view
+    if not prices.empty:
         discounted = prices[prices['original_price'].notna() & (prices['original_price'] > prices['price'])]
-        col3.metric("Products with Discounts", len(discounted))
+        col3.metric("Discounts (in view)", len(discounted))
         
         st.caption(f"Fields: {', '.join(prices.columns)}")
         st.dataframe(prices, height=500)
