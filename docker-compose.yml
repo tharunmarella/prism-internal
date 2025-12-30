@@ -1,0 +1,36 @@
+version: '3.8'
+
+services:
+  # Infrastructure for Dashboard
+  rabbitmq:
+    image: rabbitmq:3.13-management-alpine
+    environment:
+      RABBITMQ_DEFAULT_USER: prism
+      RABBITMQ_DEFAULT_PASS: prism_dev_password
+    ports:
+      - "5672:5672"
+      - "15672:15672"
+    healthcheck:
+      test: ["CMD", "rabbitmq-diagnostics", "-q", "ping"]
+      interval: 10s
+      timeout: 10s
+      retries: 5
+
+  # The Dashboard Service
+  dashboard:
+    build: .
+    ports:
+      - "8501:8501"
+    environment:
+      RABBITMQ_URL: amqp://prism:prism_dev_password@rabbitmq:5672/
+      REDIS_URL: redis://redis:6379/0
+      PRISM_API_URL: http://api:8000
+    depends_on:
+      rabbitmq:
+        condition: service_healthy
+    command: streamlit run app.py --server.port 8501 --server.address 0.0.0.0
+
+networks:
+  default:
+    name: prism-network
+
