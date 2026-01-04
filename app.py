@@ -94,7 +94,7 @@ def get_db_connection():
     
     if not db_url:
         logger.error("DATABASE_URL environment variable not set!")
-        st.error("❌ DATABASE_URL not set!")
+        st.error(" DATABASE_URL not set!")
         st.info("Set it in your environment or .env file")
         st.stop()
     
@@ -464,7 +464,7 @@ if page == "📊 Overview":
     else:
         st.info("No products yet")
 
-# Batch Scrape Page
+# Batch Scrape Page  ######################################################################################################
 elif page == "📤 Batch Scrape":
     st.title("📤 Batch Scrape")
     st.caption("Upload a CSV file with store domains to scrape")
