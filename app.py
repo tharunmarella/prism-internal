@@ -1666,17 +1666,88 @@ elif page == "🧠 Taxonomy":
     <head>
         <script src="https://unpkg.com/vis-network/standalone/umd/vis-network.min.js"></script>
         <style>
-            #graph {{
+            * {{ box-sizing: border-box; }}
+            body {{ margin: 0; background: #0e1117; font-family: -apple-system, BlinkMacSystemFont, sans-serif; }}
+            #container {{
+                position: relative;
                 width: 100%;
                 height: 600px;
+            }}
+            #graph {{
+                width: 100%;
+                height: 100%;
                 border: 1px solid #333;
                 border-radius: 8px;
                 background: #1a1a2e;
             }}
+            #controls {{
+                position: absolute;
+                top: 10px;
+                right: 10px;
+                z-index: 1000;
+                display: flex;
+                gap: 8px;
+            }}
+            .control-btn {{
+                background: rgba(99, 102, 241, 0.9);
+                color: white;
+                border: none;
+                padding: 8px 16px;
+                border-radius: 6px;
+                cursor: pointer;
+                font-size: 14px;
+                font-weight: 500;
+                display: flex;
+                align-items: center;
+                gap: 6px;
+                transition: all 0.2s;
+                box-shadow: 0 2px 8px rgba(0,0,0,0.3);
+            }}
+            .control-btn:hover {{
+                background: rgba(99, 102, 241, 1);
+                transform: translateY(-1px);
+            }}
+            #container:fullscreen, #container:-webkit-full-screen {{
+                background: #0e1117;
+                padding: 20px;
+            }}
+            #container:fullscreen #graph, #container:-webkit-full-screen #graph {{
+                height: calc(100vh - 40px);
+                border-radius: 12px;
+            }}
+            #legend {{
+                position: absolute;
+                bottom: 10px;
+                left: 10px;
+                background: rgba(0,0,0,0.7);
+                padding: 8px 12px;
+                border-radius: 6px;
+                color: white;
+                font-size: 12px;
+                z-index: 1000;
+            }}
+            .legend-item {{ display: flex; align-items: center; gap: 6px; margin: 4px 0; }}
+            .legend-dot {{ width: 12px; height: 12px; border-radius: 3px; }}
+            .cat-dot {{ background: #6366f1; }}
+            .dim-dot {{ background: #10b981; border-radius: 50%; }}
         </style>
     </head>
-    <body style="margin: 0; background: #0e1117;">
-        <div id="graph"></div>
+    <body>
+        <div id="container">
+            <div id="controls">
+                <button class="control-btn" onclick="network.fit()">
+                    <span>⊙</span> Fit
+                </button>
+                <button class="control-btn" onclick="toggleFullscreen()">
+                    <span id="fs-icon">⛶</span> <span id="fs-text">Fullscreen</span>
+                </button>
+            </div>
+            <div id="legend">
+                <div class="legend-item"><div class="legend-dot cat-dot"></div> Categories ({cat_count})</div>
+                <div class="legend-item"><div class="legend-dot dim-dot"></div> Dimensions ({dim_count})</div>
+            </div>
+            <div id="graph"></div>
+        </div>
         <script>
             var nodes = new vis.DataSet({nodes_json});
             var edges = new vis.DataSet({edges_json});
@@ -1727,9 +1798,36 @@ elif page == "🧠 Taxonomy":
             
             var network = new vis.Network(container, data, options);
             
-            // Fit to view after stabilization
             network.once('stabilizationIterationsDone', function() {{
                 network.fit();
+            }});
+            
+            function toggleFullscreen() {{
+                var elem = document.getElementById('container');
+                var icon = document.getElementById('fs-icon');
+                var text = document.getElementById('fs-text');
+                
+                if (!document.fullscreenElement && !document.webkitFullscreenElement) {{
+                    if (elem.requestFullscreen) {{
+                        elem.requestFullscreen();
+                    }} else if (elem.webkitRequestFullscreen) {{
+                        elem.webkitRequestFullscreen();
+                    }}
+                    icon.textContent = '⊗';
+                    text.textContent = 'Exit';
+                }} else {{
+                    if (document.exitFullscreen) {{
+                        document.exitFullscreen();
+                    }} else if (document.webkitExitFullscreen) {{
+                        document.webkitExitFullscreen();
+                    }}
+                    icon.textContent = '⛶';
+                    text.textContent = 'Fullscreen';
+                }}
+            }}
+            
+            document.addEventListener('fullscreenchange', function() {{
+                setTimeout(function() {{ network.fit(); }}, 100);
             }});
         </script>
     </body>
