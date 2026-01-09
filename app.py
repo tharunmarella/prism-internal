@@ -1576,7 +1576,7 @@ elif page == "🧠 Taxonomy":
             driver = GraphDatabase.driver(NEO4J_URI, auth=(NEO4J_USER, NEO4J_PASSWORD))
             
             with driver.session() as session:
-                # Get all categories and dimensions with relationships
+                # Get all categories and dimensions with REQUIRES relationships
                 result = session.run("""
                     MATCH (c:Category)-[r:REQUIRES]->(d:Dimension)
                     RETURN c.name AS category, d.name AS dimension, d.description AS description
@@ -1584,22 +1584,30 @@ elif page == "🧠 Taxonomy":
                 """)
                 relationships = [dict(record) for record in result]
                 
+                # Get category hierarchy (IS_A relationships)
+                hierarchy_result = session.run("""
+                    MATCH (child:Category)-[:IS_A]->(parent:Category)
+                    RETURN child.name AS child, parent.name AS parent
+                    ORDER BY parent.name, child.name
+                """)
+                hierarchy = [dict(record) for record in hierarchy_result]
+                
                 # Get stats
                 cat_count = session.run("MATCH (c:Category) RETURN count(c) as count").single()["count"]
                 dim_count = session.run("MATCH (d:Dimension) RETURN count(d) as count").single()["count"]
                 rel_count = session.run("MATCH ()-[r:REQUIRES]->() RETURN count(r) as count").single()["count"]
                 
             driver.close()
-            return relationships, cat_count, dim_count, rel_count
+            return relationships, hierarchy, cat_count, dim_count, rel_count
         except Exception as e:
             logger.error(f"Failed to fetch taxonomy: {e}")
-            return [], 0, 0, 0
+            return [], [], 0, 0, 0
     
     # Fetch data
     with st.spinner("Loading taxonomy from Neo4j..."):
-        relationships, cat_count, dim_count, rel_count = fetch_taxonomy()
+        relationships, hierarchy, cat_count, dim_count, rel_count = fetch_taxonomy()
     
-    if not relationships:
+    if not relationships and not hierarchy:
         st.error("❌ Could not connect to Neo4j or no data found")
         st.code(f"URI: {NEO4J_URI}")
         st.stop()
@@ -1649,10 +1657,44 @@ elif page == "🧠 Taxonomy":
             })
             node_ids.add(f"dim_{dim}")
         
-        # Add edge
+        # Add edge (category -> dimension)
         edges.append({
             "from": f"cat_{cat}",
             "to": f"dim_{dim}"
+        })
+    
+    # Add hierarchy edges (parent -> child categories)
+    for h in hierarchy:
+        parent = h["parent"]
+        child = h["child"]
+        
+        # Add parent category node if not exists
+        if f"cat_{parent}" not in node_ids:
+            nodes.append({
+                "id": f"cat_{parent}",
+                "label": parent,
+                "group": "parent",
+                "title": f"Parent Category: {parent}"
+            })
+            node_ids.add(f"cat_{parent}")
+        
+        # Add child category node if not exists
+        if f"cat_{child}" not in node_ids:
+            nodes.append({
+                "id": f"cat_{child}",
+                "label": child,
+                "group": "category",
+                "title": f"Category: {child}"
+            })
+            node_ids.add(f"cat_{child}")
+        
+        # Add hierarchy edge (thicker, different color)
+        edges.append({
+            "from": f"cat_{parent}",
+            "to": f"cat_{child}",
+            "dashes": True,
+            "width": 2,
+            "color": {"color": "#f59e0b"}
         })
     
     # Create vis.js HTML
@@ -1976,6 +2018,7 @@ elif page == "🧠 Taxonomy":
                 nodes: {{ font: {{ color: '#fff', size: 12 }}, borderWidth: 2, shadow: true }},
                 edges: {{ color: {{ color: '#666', highlight: '#00d4ff' }}, width: 1, smooth: {{ type: 'continuous' }} }},
                 groups: {{
+                    parent: {{ color: {{ background: '#f59e0b', border: '#d97706' }}, shape: 'box', font: {{ size: 16, color: '#fff', bold: true }} }},
                     category: {{ color: {{ background: '#6366f1', border: '#4f46e5' }}, shape: 'box', font: {{ size: 14, color: '#fff' }} }},
                     dimension: {{ color: {{ background: '#10b981', border: '#059669' }}, shape: 'ellipse', font: {{ size: 11, color: '#fff' }} }}
                 }},
@@ -1990,7 +2033,7 @@ elif page == "🧠 Taxonomy":
     """
     
     st.subheader("🌐 Interactive Graph")
-    st.caption("🟣 Categories | 🟢 Dimensions | Drag to pan, scroll to zoom")
+    st.caption("🟠 Parent Categories | 🟣 Categories | 🟢 Dimensions | Dashed lines = hierarchy")
     
     import streamlit.components.v1 as components
     components.html(vis_html, height=570)
