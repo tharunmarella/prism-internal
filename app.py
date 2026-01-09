@@ -1,5 +1,5 @@
 """
-Prism Worker Dashboard
+Prism Internal Dashboard
 
 A Streamlit dashboard to monitor and explore the Prism database.
 
@@ -32,7 +32,7 @@ logging.basicConfig(
         logging.StreamHandler(sys.stdout)
     ]
 )
-logger = logging.getLogger("prism-dashboard")
+logger = logging.getLogger("prism-internal")
 
 # Log startup
 logger.info("=" * 60)
@@ -44,7 +44,7 @@ logger.info("=" * 60)
 
 # Page config
 st.set_page_config(
-    page_title="Prism Dashboard",
+    page_title="Prism Internal",
     page_icon="🔮",
     layout="wide",
     initial_sidebar_state="expanded"
@@ -380,10 +380,10 @@ def get_counts() -> dict:
 
 
 # Sidebar
-st.sidebar.title("🔮 Prism Dashboard")
+st.sidebar.title("🔮 Prism Internal")
 page = st.sidebar.radio(
     "Navigation",
-    ["📊 Overview", "📤 Batch Scrape", "🔍 Semantic Search", "📬 Queues", "🛍️ Products", "🏪 Store", "🖼️ Images", "💰 Price History", "🏪 Retailers", "🔗 Discovered URLs", "📋 Crawl Jobs", "🗑️ Clear Data"]
+    ["📊 Overview", "📤 Batch Scrape", "🔍 Semantic Search", "📬 Queues", "🛍️ Products", "🏪 Store", "🖼️ Images", "💰 Price History", "🏪 Retailers", "🔗 Discovered URLs", "📋 Crawl Jobs", "🧠 Taxonomy", "🗑️ Clear Data"]
 )
 
 # Overview Page
@@ -1555,6 +1555,372 @@ elif page == "🗑️ Clear Data":
                 st.rerun()
             except Exception as e:
                 st.error(f"Failed to clear tables: {e}")
+
+
+# Taxonomy Visualization Page
+elif page == "🧠 Taxonomy":
+    st.title("🧠 Product Taxonomy")
+    st.caption("Interactive visualization of Neo4j category → dimension graph")
+    
+    # Neo4j connection settings (hardcoded for internal use)
+    NEO4J_URI = "bolt://yamabiko.proxy.rlwy.net:53674"
+    NEO4J_USER = "neo4j"
+    NEO4J_PASSWORD = "t8xa8rt45go64uwpn6mt8552yp8vlpul"
+    
+    @st.cache_data(ttl=60)
+    def fetch_taxonomy():
+        """Fetch taxonomy data from Neo4j."""
+        try:
+            from neo4j import GraphDatabase
+            
+            driver = GraphDatabase.driver(NEO4J_URI, auth=(NEO4J_USER, NEO4J_PASSWORD))
+            
+            with driver.session() as session:
+                # Get all categories and dimensions with relationships
+                result = session.run("""
+                    MATCH (c:Category)-[r:REQUIRES]->(d:Dimension)
+                    RETURN c.name AS category, d.name AS dimension, d.description AS description
+                    ORDER BY c.name, d.name
+                """)
+                relationships = [dict(record) for record in result]
+                
+                # Get stats
+                cat_count = session.run("MATCH (c:Category) RETURN count(c) as count").single()["count"]
+                dim_count = session.run("MATCH (d:Dimension) RETURN count(d) as count").single()["count"]
+                rel_count = session.run("MATCH ()-[r:REQUIRES]->() RETURN count(r) as count").single()["count"]
+                
+            driver.close()
+            return relationships, cat_count, dim_count, rel_count
+        except Exception as e:
+            logger.error(f"Failed to fetch taxonomy: {e}")
+            return [], 0, 0, 0
+    
+    # Fetch data
+    with st.spinner("Loading taxonomy from Neo4j..."):
+        relationships, cat_count, dim_count, rel_count = fetch_taxonomy()
+    
+    if not relationships:
+        st.error("❌ Could not connect to Neo4j or no data found")
+        st.code(f"URI: {NEO4J_URI}")
+        st.stop()
+    
+    # Stats row
+    col1, col2, col3 = st.columns(3)
+    col1.metric("Categories", cat_count)
+    col2.metric("Dimensions", dim_count)
+    col3.metric("Relationships", rel_count)
+    
+    st.divider()
+    
+    # Build graph data for vis.js
+    nodes = []
+    edges = []
+    node_ids = set()
+    
+    # Group by category
+    from collections import defaultdict
+    cat_dims = defaultdict(list)
+    dim_descriptions = {}
+    
+    for rel in relationships:
+        cat = rel["category"]
+        dim = rel["dimension"]
+        desc = rel.get("description", "")
+        cat_dims[cat].append(dim)
+        dim_descriptions[dim] = desc
+        
+        # Add category node
+        if f"cat_{cat}" not in node_ids:
+            nodes.append({
+                "id": f"cat_{cat}",
+                "label": cat,
+                "group": "category",
+                "title": f"Category: {cat}\nDimensions: {len(cat_dims[cat])}"
+            })
+            node_ids.add(f"cat_{cat}")
+        
+        # Add dimension node
+        if f"dim_{dim}" not in node_ids:
+            nodes.append({
+                "id": f"dim_{dim}",
+                "label": dim[:20] + "..." if len(dim) > 20 else dim,
+                "group": "dimension",
+                "title": f"{dim}\n{desc[:100] if desc else 'No description'}"
+            })
+            node_ids.add(f"dim_{dim}")
+        
+        # Add edge
+        edges.append({
+            "from": f"cat_{cat}",
+            "to": f"dim_{dim}"
+        })
+    
+    # Create vis.js HTML
+    import json
+    
+    nodes_json = json.dumps(nodes)
+    edges_json = json.dumps(edges)
+    
+    vis_html = f"""
+    <html>
+    <head>
+        <script src="https://unpkg.com/vis-network/standalone/umd/vis-network.min.js"></script>
+        <style>
+            #graph {{
+                width: 100%;
+                height: 600px;
+                border: 1px solid #333;
+                border-radius: 8px;
+                background: #1a1a2e;
+            }}
+        </style>
+    </head>
+    <body style="margin: 0; background: #0e1117;">
+        <div id="graph"></div>
+        <script>
+            var nodes = new vis.DataSet({nodes_json});
+            var edges = new vis.DataSet({edges_json});
+            
+            var container = document.getElementById('graph');
+            var data = {{ nodes: nodes, edges: edges }};
+            
+            var options = {{
+                nodes: {{
+                    font: {{ color: '#ffffff', size: 12 }},
+                    borderWidth: 2,
+                    shadow: true
+                }},
+                edges: {{
+                    color: {{ color: '#666666', highlight: '#00d4ff' }},
+                    width: 1,
+                    smooth: {{ type: 'continuous' }}
+                }},
+                groups: {{
+                    category: {{
+                        color: {{ background: '#6366f1', border: '#4f46e5' }},
+                        shape: 'box',
+                        font: {{ size: 14, color: '#ffffff' }}
+                    }},
+                    dimension: {{
+                        color: {{ background: '#10b981', border: '#059669' }},
+                        shape: 'ellipse',
+                        font: {{ size: 11, color: '#ffffff' }}
+                    }}
+                }},
+                physics: {{
+                    barnesHut: {{
+                        gravitationalConstant: -3000,
+                        centralGravity: 0.3,
+                        springLength: 120,
+                        springConstant: 0.04
+                    }},
+                    maxVelocity: 50,
+                    stabilization: {{ iterations: 150 }}
+                }},
+                interaction: {{
+                    hover: true,
+                    tooltipDelay: 100,
+                    zoomView: true,
+                    dragView: true
+                }}
+            }};
+            
+            var network = new vis.Network(container, data, options);
+            
+            // Fit to view after stabilization
+            network.once('stabilizationIterationsDone', function() {{
+                network.fit();
+            }});
+        </script>
+    </body>
+    </html>
+    """
+    
+    # Display the graph
+    st.subheader("🌐 Interactive Graph")
+    st.caption("🟣 Categories | 🟢 Dimensions | Drag to pan, scroll to zoom, hover for details")
+    
+    import streamlit.components.v1 as components
+    components.html(vis_html, height=620)
+    
+    st.divider()
+    
+    # Category browser
+    st.subheader("📁 Category Browser")
+    
+    selected_cat = st.selectbox("Select a category", sorted(cat_dims.keys()))
+    
+    if selected_cat:
+        dims = cat_dims[selected_cat]
+        st.write(f"**{selected_cat}** has **{len(dims)} dimensions**:")
+        
+        for dim in dims:
+            desc = dim_descriptions.get(dim, "No description")
+            with st.expander(dim):
+                st.write(desc)
+    
+    st.divider()
+    
+    # Shared dimensions
+    st.subheader("🔄 Most Shared Dimensions")
+    
+    dim_usage = defaultdict(list)
+    for rel in relationships:
+        dim_usage[rel["dimension"]].append(rel["category"])
+    
+    shared = [(dim, cats) for dim, cats in dim_usage.items() if len(cats) > 1]
+    shared.sort(key=lambda x: -len(x[1]))
+    
+    if shared:
+        for dim, cats in shared[:10]:
+            st.write(f"**{dim}** → used by {len(cats)} categories")
+            st.caption(", ".join(cats[:5]) + ("..." if len(cats) > 5 else ""))
+    else:
+        st.info("No shared dimensions found")
+
+
+# Taxonomy Visualization Page
+elif page == "🧠 Taxonomy":
+    st.title("🧠 Product Taxonomy")
+    st.caption("Interactive visualization of Neo4j category → dimension graph")
+    
+    # Neo4j connection settings (hardcoded for internal use)
+    NEO4J_URI = "bolt://yamabiko.proxy.rlwy.net:53674"
+    NEO4J_USER = "neo4j"
+    NEO4J_PASSWORD = "t8xa8rt45go64uwpn6mt8552yp8vlpul"
+    
+    @st.cache_data(ttl=60)
+    def fetch_taxonomy():
+        """Fetch taxonomy data from Neo4j."""
+        try:
+            from neo4j import GraphDatabase
+            
+            driver = GraphDatabase.driver(NEO4J_URI, auth=(NEO4J_USER, NEO4J_PASSWORD))
+            
+            with driver.session() as session:
+                result = session.run("""
+                    MATCH (c:Category)-[r:REQUIRES]->(d:Dimension)
+                    RETURN c.name AS category, d.name AS dimension, d.description AS description
+                    ORDER BY c.name, d.name
+                """)
+                relationships = [dict(record) for record in result]
+                
+                cat_count = session.run("MATCH (c:Category) RETURN count(c) as count").single()["count"]
+                dim_count = session.run("MATCH (d:Dimension) RETURN count(d) as count").single()["count"]
+                rel_count = session.run("MATCH ()-[r:REQUIRES]->() RETURN count(r) as count").single()["count"]
+                
+            driver.close()
+            return relationships, cat_count, dim_count, rel_count
+        except Exception as e:
+            logger.error(f"Failed to fetch taxonomy: {e}")
+            return [], 0, 0, 0
+    
+    with st.spinner("Loading taxonomy from Neo4j..."):
+        relationships, cat_count, dim_count, rel_count = fetch_taxonomy()
+    
+    if not relationships:
+        st.error("❌ Could not connect to Neo4j or no data found")
+        st.code(f"URI: {NEO4J_URI}")
+        st.stop()
+    
+    col1, col2, col3 = st.columns(3)
+    col1.metric("Categories", cat_count)
+    col2.metric("Dimensions", dim_count)
+    col3.metric("Relationships", rel_count)
+    
+    st.divider()
+    
+    # Build graph data
+    from collections import defaultdict
+    import json as json_lib
+    
+    nodes = []
+    edges = []
+    node_ids = set()
+    cat_dims = defaultdict(list)
+    dim_descriptions = {}
+    
+    for rel in relationships:
+        cat = rel["category"]
+        dim = rel["dimension"]
+        desc = rel.get("description", "")
+        cat_dims[cat].append(dim)
+        dim_descriptions[dim] = desc
+        
+        if f"cat_{cat}" not in node_ids:
+            nodes.append({"id": f"cat_{cat}", "label": cat, "group": "category", "title": f"Category: {cat}"})
+            node_ids.add(f"cat_{cat}")
+        
+        if f"dim_{dim}" not in node_ids:
+            label = dim[:20] + "..." if len(dim) > 20 else dim
+            nodes.append({"id": f"dim_{dim}", "label": label, "group": "dimension", "title": f"{dim}: {desc[:80] if desc else 'No description'}"})
+            node_ids.add(f"dim_{dim}")
+        
+        edges.append({"from": f"cat_{cat}", "to": f"dim_{dim}"})
+    
+    nodes_json = json_lib.dumps(nodes)
+    edges_json = json_lib.dumps(edges)
+    
+    vis_html = f"""
+    <html>
+    <head>
+        <script src="https://unpkg.com/vis-network/standalone/umd/vis-network.min.js"></script>
+        <style>#graph {{ width: 100%; height: 550px; border: 1px solid #333; border-radius: 8px; background: #1a1a2e; }}</style>
+    </head>
+    <body style="margin: 0; background: #0e1117;">
+        <div id="graph"></div>
+        <script>
+            var nodes = new vis.DataSet({nodes_json});
+            var edges = new vis.DataSet({edges_json});
+            var container = document.getElementById('graph');
+            var data = {{ nodes: nodes, edges: edges }};
+            var options = {{
+                nodes: {{ font: {{ color: '#fff', size: 12 }}, borderWidth: 2, shadow: true }},
+                edges: {{ color: {{ color: '#666', highlight: '#00d4ff' }}, width: 1, smooth: {{ type: 'continuous' }} }},
+                groups: {{
+                    category: {{ color: {{ background: '#6366f1', border: '#4f46e5' }}, shape: 'box', font: {{ size: 14, color: '#fff' }} }},
+                    dimension: {{ color: {{ background: '#10b981', border: '#059669' }}, shape: 'ellipse', font: {{ size: 11, color: '#fff' }} }}
+                }},
+                physics: {{ barnesHut: {{ gravitationalConstant: -3000, centralGravity: 0.3, springLength: 120 }}, stabilization: {{ iterations: 150 }} }},
+                interaction: {{ hover: true, tooltipDelay: 100, zoomView: true, dragView: true }}
+            }};
+            var network = new vis.Network(container, data, options);
+            network.once('stabilizationIterationsDone', function() {{ network.fit(); }});
+        </script>
+    </body>
+    </html>
+    """
+    
+    st.subheader("🌐 Interactive Graph")
+    st.caption("🟣 Categories | 🟢 Dimensions | Drag to pan, scroll to zoom")
+    
+    import streamlit.components.v1 as components
+    components.html(vis_html, height=570)
+    
+    st.divider()
+    st.subheader("📁 Category Browser")
+    
+    selected_cat = st.selectbox("Select a category", sorted(cat_dims.keys()))
+    if selected_cat:
+        dims = cat_dims[selected_cat]
+        st.write(f"**{selected_cat}** has **{len(dims)} dimensions**:")
+        for dim in dims:
+            with st.expander(dim):
+                st.write(dim_descriptions.get(dim, "No description"))
+    
+    st.divider()
+    st.subheader("🔄 Most Shared Dimensions")
+    
+    dim_usage = defaultdict(list)
+    for rel in relationships:
+        dim_usage[rel["dimension"]].append(rel["category"])
+    
+    shared = [(dim, cats) for dim, cats in dim_usage.items() if len(cats) > 1]
+    shared.sort(key=lambda x: -len(x[1]))
+    
+    for dim, cats in shared[:10]:
+        st.write(f"**{dim}** → {len(cats)} categories")
+        st.caption(", ".join(cats[:5]) + ("..." if len(cats) > 5 else ""))
 
 
 # Footer
