@@ -1505,7 +1505,12 @@ elif page == "📧 Lead Outreach":
     with col3:
         email_filter = st.selectbox("Email", ["All", "Has Email", "No Email"])
     with col4:
-        limit_outreach = st.number_input("Limit", min_value=10, max_value=500, value=100, key="outreach_limit")
+        limit_outreach = st.number_input("Limit", min_value=10, max_value=500, value=200, key="outreach_limit")
+    
+    # Sort options
+    col_sort1, col_sort2 = st.columns([1, 3])
+    with col_sort1:
+        sort_by = st.selectbox("Sort by", ["ID", "Platform Rank", "Domain", "Status"], key="outreach_sort")
     
     # Build query
     query = """
@@ -1533,7 +1538,15 @@ elif page == "📧 Lead Outreach":
     elif email_filter == "No Email":
         query += " AND (contact_email IS NULL OR contact_email = '')"
     
-    query += f" ORDER BY platform_rank ASC NULLS LAST LIMIT {limit_outreach}"
+    # Sort order
+    if sort_by == "ID":
+        query += f" ORDER BY id ASC LIMIT {limit_outreach}"
+    elif sort_by == "Platform Rank":
+        query += f" ORDER BY platform_rank ASC NULLS LAST LIMIT {limit_outreach}"
+    elif sort_by == "Domain":
+        query += f" ORDER BY domain ASC LIMIT {limit_outreach}"
+    else:
+        query += f" ORDER BY outreach_status ASC, id ASC LIMIT {limit_outreach}"
     
     leads = run_query(query)
     
