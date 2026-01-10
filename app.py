@@ -1582,9 +1582,10 @@ elif page == "📧 Lead Outreach":
                         
                         if result.get("success"):
                             # Update status
+                            from sqlalchemy import text
                             conn = get_db_connection()
                             with conn.session as session:
-                                session.execute(f"UPDATE outreach_contacts SET outreach_status = 'sent', updated_at = NOW() WHERE id = {lead['id']}")
+                                session.execute(text(f"UPDATE outreach_contacts SET outreach_status = 'sent', updated_at = NOW() WHERE id = {lead['id']}"))
                                 session.commit()
                             st.success(f"✅ Email sent to {lead['contact_email']}!")
                             st.rerun()
