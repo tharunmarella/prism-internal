@@ -383,7 +383,7 @@ def get_counts() -> dict:
 st.sidebar.title("🔮 Prism Internal")
 page = st.sidebar.radio(
     "Navigation",
-    ["📊 Overview", "📤 Batch Scrape", "🔍 Semantic Search", "📬 Queues", "🛍️ Products", "🏪 Store", "🖼️ Images", "💰 Price History", "🏪 Retailers", "🔗 Discovered URLs", "📋 Crawl Jobs", "🧠 Taxonomy", "🗑️ Clear Data"]
+    ["📊 Overview", "📤 Batch Scrape", "🔍 Semantic Search", "📬 Queues", "🛍️ Products", "🏪 Store", "🖼️ Images", "💰 Price History", "🏪 Retailers", "🔗 Discovered URLs", "📋 Crawl Jobs", "🧠 Taxonomy", "📧 Lead Outreach", "🗑️ Clear Data"]
 )
 
 # Overview Page
@@ -1488,6 +1488,186 @@ elif page == "📋 Crawl Jobs":
         st.dataframe(jobs, height=500)
     else:
         st.info("No crawl jobs yet")
+
+
+# Lead Outreach Page
+elif page == "📧 Lead Outreach":
+    st.title("📧 Lead Outreach")
+    st.caption("Manage outreach to potential merchant customers")
+    
+    # Filters row
+    col1, col2, col3, col4 = st.columns([2, 1, 1, 1])
+    
+    with col1:
+        search_domain = st.text_input("🔍 Search domain or name", "")
+    with col2:
+        status_filter = st.selectbox("Status", ["All", "pending", "sent", "replied", "meeting", "converted", "not_interested"])
+    with col3:
+        email_filter = st.selectbox("Email", ["All", "Has Email", "No Email"])
+    with col4:
+        limit_outreach = st.number_input("Limit", min_value=10, max_value=500, value=100, key="outreach_limit")
+    
+    # Build query
+    query = """
+        SELECT 
+            id,
+            domain,
+            contact_name,
+            contact_title,
+            contact_email,
+            contact_linkedin,
+            platform_rank,
+            outreach_status,
+            notes,
+            updated_at
+        FROM outreach_contacts
+        WHERE 1=1
+    """
+    
+    if search_domain:
+        query += f" AND (domain ILIKE '%{search_domain}%' OR contact_name ILIKE '%{search_domain}%')"
+    if status_filter != "All":
+        query += f" AND outreach_status = '{status_filter}'"
+    if email_filter == "Has Email":
+        query += " AND contact_email IS NOT NULL AND contact_email != ''"
+    elif email_filter == "No Email":
+        query += " AND (contact_email IS NULL OR contact_email = '')"
+    
+    query += f" ORDER BY platform_rank ASC NULLS LAST LIMIT {limit_outreach}"
+    
+    leads = run_query(query)
+    
+    # Stats row
+    stats = run_query("""
+        SELECT 
+            COUNT(*) as total,
+            SUM(CASE WHEN contact_email IS NOT NULL AND contact_email != '' THEN 1 ELSE 0 END) as with_email,
+            SUM(CASE WHEN outreach_status = 'pending' THEN 1 ELSE 0 END) as pending,
+            SUM(CASE WHEN outreach_status = 'sent' THEN 1 ELSE 0 END) as sent,
+            SUM(CASE WHEN outreach_status = 'replied' THEN 1 ELSE 0 END) as replied,
+            SUM(CASE WHEN outreach_status = 'meeting' THEN 1 ELSE 0 END) as meeting,
+            SUM(CASE WHEN outreach_status = 'converted' THEN 1 ELSE 0 END) as converted
+        FROM outreach_contacts
+    """)
+    
+    if not stats.empty:
+        col1, col2, col3, col4, col5, col6, col7 = st.columns(7)
+        col1.metric("Total Leads", int(stats['total'].iloc[0] or 0))
+        col2.metric("📧 With Email", int(stats['with_email'].iloc[0] or 0))
+        col3.metric("⏳ Pending", int(stats['pending'].iloc[0] or 0))
+        col4.metric("📤 Sent", int(stats['sent'].iloc[0] or 0))
+        col5.metric("💬 Replied", int(stats['replied'].iloc[0] or 0))
+        col6.metric("📅 Meeting", int(stats['meeting'].iloc[0] or 0))
+        col7.metric("✅ Converted", int(stats['converted'].iloc[0] or 0))
+    
+    st.divider()
+    
+    if not leads.empty:
+        st.subheader(f"📋 Leads ({len(leads)} shown)")
+        
+        # Make the dataframe editable for status updates
+        edited_df = st.data_editor(
+            leads,
+            column_config={
+                "id": st.column_config.NumberColumn("ID", disabled=True, width="small"),
+                "domain": st.column_config.TextColumn("Domain", disabled=True, width="medium"),
+                "contact_name": st.column_config.TextColumn("Name", disabled=True, width="medium"),
+                "contact_title": st.column_config.TextColumn("Title", disabled=True, width="medium"),
+                "contact_email": st.column_config.TextColumn("Email", disabled=True, width="medium"),
+                "contact_linkedin": st.column_config.LinkColumn("LinkedIn", width="small"),
+                "platform_rank": st.column_config.NumberColumn("Rank", disabled=True, width="small"),
+                "outreach_status": st.column_config.SelectboxColumn(
+                    "Status",
+                    options=["pending", "sent", "replied", "meeting", "converted", "not_interested"],
+                    width="small"
+                ),
+                "notes": st.column_config.TextColumn("Notes", width="large"),
+                "updated_at": st.column_config.DatetimeColumn("Updated", disabled=True, width="small")
+            },
+            hide_index=True,
+            use_container_width=True,
+            height=500,
+            num_rows="fixed"
+        )
+        
+        # Save changes button
+        if st.button("💾 Save Changes", type="primary"):
+            try:
+                conn = get_db_connection()
+                updated_count = 0
+                
+                for idx, row in edited_df.iterrows():
+                    original_row = leads.iloc[idx]
+                    # Check if status or notes changed
+                    if row['outreach_status'] != original_row['outreach_status'] or row['notes'] != original_row['notes']:
+                        with conn.session as session:
+                            session.execute(
+                                f"""UPDATE outreach_contacts 
+                                   SET outreach_status = '{row['outreach_status']}', 
+                                       notes = '{row['notes'] or ''}',
+                                       updated_at = NOW() 
+                                   WHERE id = {row['id']}"""
+                            )
+                            session.commit()
+                        updated_count += 1
+                
+                if updated_count > 0:
+                    st.success(f"✅ Updated {updated_count} leads!")
+                    st.rerun()
+                else:
+                    st.info("No changes detected.")
+            except Exception as e:
+                st.error(f"Failed to save: {e}")
+        
+        st.divider()
+        
+        # Quick actions
+        st.subheader("⚡ Quick Actions")
+        col1, col2, col3 = st.columns(3)
+        
+        with col1:
+            st.write("**Bulk Status Update**")
+            new_status = st.selectbox("New status", ["sent", "not_interested"], key="bulk_status")
+            target_status = st.selectbox("For leads with status", ["pending", "sent"], key="bulk_target")
+            if st.button("🔄 Update All"):
+                try:
+                    conn = get_db_connection()
+                    with conn.session as session:
+                        session.execute(f"UPDATE outreach_contacts SET outreach_status = '{new_status}', updated_at = NOW() WHERE outreach_status = '{target_status}'")
+                        session.commit()
+                    st.success("Updated!")
+                    st.rerun()
+                except Exception as e:
+                    st.error(f"Failed: {e}")
+        
+        with col2:
+            st.write("**Export for Email Tool**")
+            export_status = st.selectbox("Export leads with status", ["pending", "sent", "All with email"], key="export_status")
+            if st.button("📥 Export CSV"):
+                if export_status == "All with email":
+                    export_df = run_query("SELECT domain, contact_name, contact_email, contact_title FROM outreach_contacts WHERE contact_email IS NOT NULL AND contact_email != ''")
+                else:
+                    export_df = run_query(f"SELECT domain, contact_name, contact_email, contact_title FROM outreach_contacts WHERE outreach_status = '{export_status}' AND contact_email IS NOT NULL")
+                
+                if not export_df.empty:
+                    csv = export_df.to_csv(index=False)
+                    st.download_button("💾 Download", csv, f"leads_{export_status}.csv", "text/csv")
+                else:
+                    st.warning("No leads to export")
+        
+        with col3:
+            st.write("**Statistics**")
+            conversion_rate = 0
+            if not stats.empty and stats['sent'].iloc[0] and stats['sent'].iloc[0] > 0:
+                replied = stats['replied'].iloc[0] or 0
+                meeting = stats['meeting'].iloc[0] or 0
+                converted = stats['converted'].iloc[0] or 0
+                sent = stats['sent'].iloc[0]
+                conversion_rate = ((replied + meeting + converted) / sent) * 100
+            st.metric("Response Rate", f"{conversion_rate:.1f}%")
+            
+    else:
+        st.info("No leads found. Run the contact enrichment script to populate this table.")
 
 
 # Clear Data Page
