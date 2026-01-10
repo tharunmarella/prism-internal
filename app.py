@@ -1493,283 +1493,133 @@ elif page == "📋 Crawl Jobs":
 # Lead Outreach Page
 elif page == "📧 Lead Outreach":
     st.title("📧 Lead Outreach")
-    st.caption("Manage outreach to potential merchant customers")
     
-    # Filters row
-    col1, col2, col3, col4 = st.columns([2, 1, 1, 1])
-    
-    with col1:
-        search_domain = st.text_input("🔍 Search domain or name", "")
-    with col2:
-        status_filter = st.selectbox("Status", ["All", "pending", "sent", "replied", "meeting", "converted", "not_interested"])
-    with col3:
-        email_filter = st.selectbox("Email", ["All", "Has Email", "No Email"])
-    with col4:
-        limit_outreach = st.number_input("Limit", min_value=10, max_value=500, value=200, key="outreach_limit")
-    
-    # Sort options
-    col_sort1, col_sort2 = st.columns([1, 3])
-    with col_sort1:
-        sort_by = st.selectbox("Sort by", ["ID", "Platform Rank", "Domain", "Status"], key="outreach_sort")
-    
-    # Build query
-    query = """
-        SELECT 
-            id,
-            domain,
-            contact_name,
-            contact_title,
-            contact_email,
-            contact_linkedin,
-            platform_rank,
-            outreach_status,
-            notes,
-            searched_at,
-            search_source,
-            updated_at
-        FROM outreach_contacts
-        WHERE 1=1
-    """
-    
-    if search_domain:
-        query += f" AND (domain ILIKE '%{search_domain}%' OR contact_name ILIKE '%{search_domain}%')"
-    if status_filter != "All":
-        query += f" AND outreach_status = '{status_filter}'"
-    if email_filter == "Has Email":
-        query += " AND contact_email IS NOT NULL AND contact_email != ''"
-    elif email_filter == "No Email":
-        query += " AND (contact_email IS NULL OR contact_email = '')"
-    
-    # Sort order
-    if sort_by == "ID":
-        query += f" ORDER BY id ASC LIMIT {limit_outreach}"
-    elif sort_by == "Platform Rank":
-        query += f" ORDER BY platform_rank ASC NULLS LAST LIMIT {limit_outreach}"
-    elif sort_by == "Domain":
-        query += f" ORDER BY domain ASC LIMIT {limit_outreach}"
-    else:
-        query += f" ORDER BY outreach_status ASC, id ASC LIMIT {limit_outreach}"
-    
-    leads = run_query(query)
-    
-    # Stats row
+    # Get stats
     stats = run_query("""
         SELECT 
             COUNT(*) as total,
-            SUM(CASE WHEN searched_at IS NULL THEN 1 ELSE 0 END) as not_searched,
             SUM(CASE WHEN contact_email IS NOT NULL AND contact_email != '' THEN 1 ELSE 0 END) as with_email,
             SUM(CASE WHEN outreach_status = 'pending' THEN 1 ELSE 0 END) as pending,
             SUM(CASE WHEN outreach_status = 'sent' THEN 1 ELSE 0 END) as sent,
-            SUM(CASE WHEN outreach_status = 'replied' THEN 1 ELSE 0 END) as replied,
-            SUM(CASE WHEN outreach_status = 'converted' THEN 1 ELSE 0 END) as converted
+            SUM(CASE WHEN outreach_status = 'replied' THEN 1 ELSE 0 END) as replied
         FROM outreach_contacts
     """)
     
+    # Simple stats bar
     if not stats.empty:
-        col1, col2, col3, col4, col5, col6, col7 = st.columns(7)
-        col1.metric("Total Leads", int(stats['total'].iloc[0] or 0))
-        col2.metric("🔍 Not Searched", int(stats['not_searched'].iloc[0] or 0))
-        col3.metric("📧 With Email", int(stats['with_email'].iloc[0] or 0))
-        col4.metric("⏳ Pending", int(stats['pending'].iloc[0] or 0))
-        col5.metric("📤 Sent", int(stats['sent'].iloc[0] or 0))
-        col6.metric("💬 Replied", int(stats['replied'].iloc[0] or 0))
-        col7.metric("✅ Converted", int(stats['converted'].iloc[0] or 0))
+        col1, col2, col3, col4, col5 = st.columns(5)
+        col1.metric("Total", int(stats['total'].iloc[0] or 0))
+        col2.metric("With Email", int(stats['with_email'].iloc[0] or 0))
+        col3.metric("Pending", int(stats['pending'].iloc[0] or 0))
+        col4.metric("Sent", int(stats['sent'].iloc[0] or 0))
+        col5.metric("Replied", int(stats['replied'].iloc[0] or 0))
     
     st.divider()
     
-    if not leads.empty:
-        st.subheader(f"📋 Leads ({len(leads)} shown)")
-        
-        # Make the dataframe editable for status updates
-        edited_df = st.data_editor(
-            leads,
-            column_config={
-                "id": st.column_config.NumberColumn("ID", disabled=True, width="small"),
-                "domain": st.column_config.TextColumn("Domain", disabled=True, width="medium"),
-                "contact_name": st.column_config.TextColumn("Name", disabled=True, width="medium"),
-                "contact_title": st.column_config.TextColumn("Title", disabled=True, width="medium"),
-                "contact_email": st.column_config.TextColumn("Email", disabled=True, width="medium"),
-                "contact_linkedin": st.column_config.LinkColumn("LinkedIn", width="small"),
-                "platform_rank": st.column_config.NumberColumn("Rank", disabled=True, width="small"),
-                "outreach_status": st.column_config.SelectboxColumn(
-                    "Status",
-                    options=["pending", "sent", "replied", "meeting", "converted", "not_interested"],
-                    width="small"
-                ),
-                "notes": st.column_config.TextColumn("Notes", width="large"),
-                "updated_at": st.column_config.DatetimeColumn("Updated", disabled=True, width="small")
-            },
-            hide_index=True,
-            use_container_width=True,
-            height=500,
-            num_rows="fixed"
+    # Main action: Send Email
+    st.subheader("🚀 Send Outreach Email")
+    
+    # Get pending leads with emails
+    pending_leads = run_query("""
+        SELECT id, domain, contact_name, contact_email, contact_title, platform_rank
+        FROM outreach_contacts
+        WHERE contact_email IS NOT NULL 
+          AND contact_email != '' 
+          AND outreach_status = 'pending'
+        ORDER BY platform_rank ASC NULLS LAST
+        LIMIT 100
+    """)
+    
+    if not pending_leads.empty:
+        # Dropdown to select lead
+        selected_idx = st.selectbox(
+            "Select a lead",
+            options=pending_leads.index.tolist(),
+            format_func=lambda x: f"{pending_leads.loc[x, 'domain']} → {pending_leads.loc[x, 'contact_name']} ({pending_leads.loc[x, 'contact_email']})"
         )
         
-        # Save changes button
-        if st.button("💾 Save Changes", type="primary"):
-            try:
-                conn = get_db_connection()
-                updated_count = 0
-                
-                for idx, row in edited_df.iterrows():
-                    original_row = leads.iloc[idx]
-                    # Check if status or notes changed
-                    if row['outreach_status'] != original_row['outreach_status'] or row['notes'] != original_row['notes']:
-                        with conn.session as session:
-                            session.execute(
-                                f"""UPDATE outreach_contacts 
-                                   SET outreach_status = '{row['outreach_status']}', 
-                                       notes = '{row['notes'] or ''}',
-                                       updated_at = NOW() 
-                                   WHERE id = {row['id']}"""
-                            )
-                            session.commit()
-                        updated_count += 1
-                
-                if updated_count > 0:
-                    st.success(f"✅ Updated {updated_count} leads!")
-                    st.rerun()
-                else:
-                    st.info("No changes detected.")
-            except Exception as e:
-                st.error(f"Failed to save: {e}")
-        
-        st.divider()
-        
-        # Quick actions
-        st.subheader("⚡ Quick Actions")
-        col1, col2 = st.columns(2)
-        
-        with col1:
-            st.write("**Export for Email Tool**")
-            export_status = st.selectbox("Export leads with status", ["pending", "sent", "All with email"], key="export_status")
-            if st.button("📥 Export CSV"):
-                if export_status == "All with email":
-                    export_df = run_query("SELECT domain, contact_name, contact_email, contact_title FROM outreach_contacts WHERE contact_email IS NOT NULL AND contact_email != ''")
-                else:
-                    export_df = run_query(f"SELECT domain, contact_name, contact_email, contact_title FROM outreach_contacts WHERE outreach_status = '{export_status}' AND contact_email IS NOT NULL")
-                
-                if not export_df.empty:
-                    csv = export_df.to_csv(index=False)
-                    st.download_button("💾 Download", csv, f"leads_{export_status}.csv", "text/csv")
-                else:
-                    st.warning("No leads to export")
-        
-        with col2:
-            st.write("**Statistics**")
-            conversion_rate = 0
-            if not stats.empty and stats['sent'].iloc[0] and stats['sent'].iloc[0] > 0:
-                replied = stats['replied'].iloc[0] or 0
-                meeting = stats['meeting'].iloc[0] or 0
-                converted = stats['converted'].iloc[0] or 0
-                sent = stats['sent'].iloc[0]
-                conversion_rate = ((replied + meeting + converted) / sent) * 100
-            st.metric("Response Rate", f"{conversion_rate:.1f}%")
-        
-        st.divider()
-        
-        # Send Email Section
-        st.subheader("📧 Send Outreach Emails")
-        
-        # Get leads with emails that are pending
-        leads_with_email = leads[
-            (leads['contact_email'].notna()) & 
-            (leads['contact_email'] != '') &
-            (leads['outreach_status'] == 'pending')
-        ]
-        
-        if not leads_with_email.empty:
-            st.info(f"Found {len(leads_with_email)} pending leads with emails ready to send.")
+        if selected_idx is not None:
+            lead = pending_leads.loc[selected_idx]
             
-            # Select a lead to send email to
-            selected_lead_idx = st.selectbox(
-                "Select lead to email",
-                options=leads_with_email.index.tolist(),
-                format_func=lambda x: f"{leads_with_email.loc[x, 'domain']} - {leads_with_email.loc[x, 'contact_name']} ({leads_with_email.loc[x, 'contact_email']})"
-            )
+            # Show selected lead info
+            st.info(f"**{lead['domain']}** | {lead['contact_name']} ({lead['contact_title']}) | {lead['contact_email']}")
             
-            if selected_lead_idx is not None:
-                selected_lead = leads_with_email.loc[selected_lead_idx]
-                
-                col1, col2 = st.columns([2, 1])
-                with col1:
-                    st.write(f"**Domain:** {selected_lead['domain']}")
-                    st.write(f"**Contact:** {selected_lead['contact_name']} - {selected_lead['contact_title']}")
-                    st.write(f"**Email:** {selected_lead['contact_email']}")
-                
-                with col2:
-                    if st.button("🚀 Generate & Send Email", type="primary", key=f"send_{selected_lead['id']}"):
-                        with st.spinner("Generating PDF preview and email..."):
-                            try:
-                                import httpx
-                                import asyncio
+            if st.button("📧 Generate & Send Email", type="primary", use_container_width=True):
+                with st.spinner("Generating preview and sending email..."):
+                    try:
+                        import httpx
+                        import asyncio
+                        
+                        PRISM_API_URL = os.getenv("PRISM_API_URL", "https://prism-api-production.up.railway.app")
+                        
+                        async def send_outreach():
+                            async with httpx.AsyncClient(timeout=180.0) as client:
+                                # Generate preview
+                                preview_resp = await client.post(
+                                    f"{PRISM_API_URL}/api/v1/preview/generate",
+                                    json={"domain": lead['domain'], "product_count": 5}
+                                )
+                                if preview_resp.status_code != 200:
+                                    return {"error": f"Preview failed: {preview_resp.status_code}"}
                                 
-                                PRISM_API_URL = os.getenv("PRISM_API_URL", "https://prism-api-production.up.railway.app")
+                                preview_data = preview_resp.json()
                                 
-                                async def send_outreach():
-                                    async with httpx.AsyncClient(timeout=120.0) as client:
-                                        # Step 1: Generate preview PDF
-                                        st.write("📄 Generating product preview PDF...")
-                                        preview_resp = await client.post(
-                                            f"{PRISM_API_URL}/api/v1/preview/generate",
-                                            json={"store_url": f"https://{selected_lead['domain']}"}
-                                        )
-                                        
-                                        if preview_resp.status_code != 200:
-                                            return {"error": f"Failed to generate preview: {preview_resp.text}"}
-                                        
-                                        preview_data = preview_resp.json()
-                                        pdf_base64 = preview_data.get("pdf_base64")
-                                        enriched_products = preview_data.get("products", [])
-                                        
-                                        if not pdf_base64:
-                                            return {"error": "No PDF generated"}
-                                        
-                                        # Step 2: Send email with AI
-                                        st.write("✉️ Generating and sending email...")
-                                        email_resp = await client.post(
-                                            f"{PRISM_API_URL}/api/v1/email/outreach/ai",
-                                            json={
-                                                "to_email": selected_lead['contact_email'],
-                                                "to_name": selected_lead['contact_name'],
-                                                "store_name": selected_lead['domain'].replace('.com', '').replace('www.', '').title(),
-                                                "pdf_base64": pdf_base64,
-                                                "enriched_products": enriched_products
-                                            }
-                                        )
-                                        
-                                        if email_resp.status_code != 200:
-                                            return {"error": f"Failed to send email: {email_resp.text}"}
-                                        
-                                        return email_resp.json()
-                                
-                                result = asyncio.run(send_outreach())
-                                
-                                if "error" in result:
-                                    st.error(f"❌ {result['error']}")
-                                else:
-                                    # Update status to 'sent'
-                                    conn = get_db_connection()
-                                    with conn.session as session:
-                                        session.execute(
-                                            f"""UPDATE outreach_contacts 
-                                               SET outreach_status = 'sent', 
-                                                   updated_at = NOW() 
-                                               WHERE id = {selected_lead['id']}"""
-                                        )
-                                        session.commit()
-                                    
-                                    st.success(f"✅ Email sent to {selected_lead['contact_email']}!")
-                                    st.balloons()
-                                    st.rerun()
-                                    
-                            except Exception as e:
-                                st.error(f"❌ Error: {str(e)}")
-        else:
-            st.warning("No pending leads with emails. Either all have been sent or no emails found.")
-            
+                                # Send email
+                                email_resp = await client.post(
+                                    f"{PRISM_API_URL}/api/v1/email/outreach/ai",
+                                    json={
+                                        "to_email": lead['contact_email'],
+                                        "to_name": lead['contact_name'],
+                                        "store_name": lead['domain'].replace('.com', '').replace('.co', '').replace('www.', '').title(),
+                                        "pdf_base64": preview_data.get("pdf_base64"),
+                                        "enriched_products": []
+                                    },
+                                    timeout=90.0
+                                )
+                                return email_resp.json()
+                        
+                        result = asyncio.run(send_outreach())
+                        
+                        if result.get("success"):
+                            # Update status
+                            conn = get_db_connection()
+                            with conn.session as session:
+                                session.execute(f"UPDATE outreach_contacts SET outreach_status = 'sent', updated_at = NOW() WHERE id = {lead['id']}")
+                                session.commit()
+                            st.success(f"✅ Email sent to {lead['contact_email']}!")
+                            st.rerun()
+                        else:
+                            st.error(f"❌ Failed: {result.get('error_message', 'Unknown error')}")
+                    except Exception as e:
+                        st.error(f"❌ Error: {str(e)}")
     else:
-        st.info("No leads found. Run the contact enrichment script to populate this table.")
+        st.success("🎉 All leads have been contacted!")
+    
+    st.divider()
+    
+    # Simple table of all leads
+    col1, col2 = st.columns([3, 1])
+    with col1:
+        search = st.text_input("🔍 Search", placeholder="Domain or name...")
+    with col2:
+        status_filter = st.selectbox("Status", ["All", "pending", "sent", "replied"])
+    
+    query = """
+        SELECT id, domain, contact_name, contact_email, outreach_status, platform_rank
+        FROM outreach_contacts WHERE 1=1
+    """
+    if search:
+        query += f" AND (domain ILIKE '%{search}%' OR contact_name ILIKE '%{search}%')"
+    if status_filter != "All":
+        query += f" AND outreach_status = '{status_filter}'"
+    query += " ORDER BY id LIMIT 100"
+    
+    leads = run_query(query)
+    
+    if not leads.empty:
+        st.dataframe(leads, use_container_width=True, hide_index=True)
+    else:
+        st.info("No leads found.")
 
 
 # Clear Data Page
