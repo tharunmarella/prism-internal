@@ -1636,24 +1636,9 @@ elif page == "📧 Lead Outreach":
         
         # Quick actions
         st.subheader("⚡ Quick Actions")
-        col1, col2, col3 = st.columns(3)
+        col1, col2 = st.columns(2)
         
         with col1:
-            st.write("**Bulk Status Update**")
-            new_status = st.selectbox("New status", ["sent", "not_interested"], key="bulk_status")
-            target_status = st.selectbox("For leads with status", ["pending", "sent"], key="bulk_target")
-            if st.button("🔄 Update All"):
-                try:
-                    conn = get_db_connection()
-                    with conn.session as session:
-                        session.execute(f"UPDATE outreach_contacts SET outreach_status = '{new_status}', updated_at = NOW() WHERE outreach_status = '{target_status}'")
-                        session.commit()
-                    st.success("Updated!")
-                    st.rerun()
-                except Exception as e:
-                    st.error(f"Failed: {e}")
-        
-        with col2:
             st.write("**Export for Email Tool**")
             export_status = st.selectbox("Export leads with status", ["pending", "sent", "All with email"], key="export_status")
             if st.button("📥 Export CSV"):
@@ -1668,7 +1653,7 @@ elif page == "📧 Lead Outreach":
                 else:
                     st.warning("No leads to export")
         
-        with col3:
+        with col2:
             st.write("**Statistics**")
             conversion_rate = 0
             if not stats.empty and stats['sent'].iloc[0] and stats['sent'].iloc[0] > 0:
