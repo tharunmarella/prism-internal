@@ -1665,6 +1665,108 @@ elif page == "📧 Lead Outreach":
                 sent = stats['sent'].iloc[0]
                 conversion_rate = ((replied + meeting + converted) / sent) * 100
             st.metric("Response Rate", f"{conversion_rate:.1f}%")
+        
+        st.divider()
+        
+        # Send Email Section
+        st.subheader("📧 Send Outreach Emails")
+        
+        # Get leads with emails that are pending
+        leads_with_email = leads[
+            (leads['contact_email'].notna()) & 
+            (leads['contact_email'] != '') &
+            (leads['outreach_status'] == 'pending')
+        ]
+        
+        if not leads_with_email.empty:
+            st.info(f"Found {len(leads_with_email)} pending leads with emails ready to send.")
+            
+            # Select a lead to send email to
+            selected_lead_idx = st.selectbox(
+                "Select lead to email",
+                options=leads_with_email.index.tolist(),
+                format_func=lambda x: f"{leads_with_email.loc[x, 'domain']} - {leads_with_email.loc[x, 'contact_name']} ({leads_with_email.loc[x, 'contact_email']})"
+            )
+            
+            if selected_lead_idx is not None:
+                selected_lead = leads_with_email.loc[selected_lead_idx]
+                
+                col1, col2 = st.columns([2, 1])
+                with col1:
+                    st.write(f"**Domain:** {selected_lead['domain']}")
+                    st.write(f"**Contact:** {selected_lead['contact_name']} - {selected_lead['contact_title']}")
+                    st.write(f"**Email:** {selected_lead['contact_email']}")
+                
+                with col2:
+                    if st.button("🚀 Generate & Send Email", type="primary", key=f"send_{selected_lead['id']}"):
+                        with st.spinner("Generating PDF preview and email..."):
+                            try:
+                                import httpx
+                                import asyncio
+                                
+                                PRISM_API_URL = os.getenv("PRISM_API_URL", "https://prism-api-production.up.railway.app")
+                                
+                                async def send_outreach():
+                                    async with httpx.AsyncClient(timeout=120.0) as client:
+                                        # Step 1: Generate preview PDF
+                                        st.write("📄 Generating product preview PDF...")
+                                        preview_resp = await client.post(
+                                            f"{PRISM_API_URL}/api/v1/preview/generate",
+                                            json={"store_url": f"https://{selected_lead['domain']}"}
+                                        )
+                                        
+                                        if preview_resp.status_code != 200:
+                                            return {"error": f"Failed to generate preview: {preview_resp.text}"}
+                                        
+                                        preview_data = preview_resp.json()
+                                        pdf_base64 = preview_data.get("pdf_base64")
+                                        enriched_products = preview_data.get("products", [])
+                                        
+                                        if not pdf_base64:
+                                            return {"error": "No PDF generated"}
+                                        
+                                        # Step 2: Send email with AI
+                                        st.write("✉️ Generating and sending email...")
+                                        email_resp = await client.post(
+                                            f"{PRISM_API_URL}/api/v1/email/outreach/ai",
+                                            json={
+                                                "to_email": selected_lead['contact_email'],
+                                                "to_name": selected_lead['contact_name'],
+                                                "store_name": selected_lead['domain'].replace('.com', '').replace('www.', '').title(),
+                                                "pdf_base64": pdf_base64,
+                                                "enriched_products": enriched_products
+                                            }
+                                        )
+                                        
+                                        if email_resp.status_code != 200:
+                                            return {"error": f"Failed to send email: {email_resp.text}"}
+                                        
+                                        return email_resp.json()
+                                
+                                result = asyncio.run(send_outreach())
+                                
+                                if "error" in result:
+                                    st.error(f"❌ {result['error']}")
+                                else:
+                                    # Update status to 'sent'
+                                    conn = get_db_connection()
+                                    with conn.session as session:
+                                        session.execute(
+                                            f"""UPDATE outreach_contacts 
+                                               SET outreach_status = 'sent', 
+                                                   updated_at = NOW() 
+                                               WHERE id = {selected_lead['id']}"""
+                                        )
+                                        session.commit()
+                                    
+                                    st.success(f"✅ Email sent to {selected_lead['contact_email']}!")
+                                    st.balloons()
+                                    st.rerun()
+                                    
+                            except Exception as e:
+                                st.error(f"❌ Error: {str(e)}")
+        else:
+            st.warning("No pending leads with emails. Either all have been sent or no emails found.")
             
     else:
         st.info("No leads found. Run the contact enrichment script to populate this table.")
