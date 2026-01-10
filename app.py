@@ -1524,6 +1524,8 @@ elif page == "📧 Lead Outreach":
             platform_rank,
             outreach_status,
             notes,
+            searched_at,
+            search_source,
             updated_at
         FROM outreach_contacts
         WHERE 1=1
@@ -1554,11 +1556,11 @@ elif page == "📧 Lead Outreach":
     stats = run_query("""
         SELECT 
             COUNT(*) as total,
+            SUM(CASE WHEN searched_at IS NULL THEN 1 ELSE 0 END) as not_searched,
             SUM(CASE WHEN contact_email IS NOT NULL AND contact_email != '' THEN 1 ELSE 0 END) as with_email,
             SUM(CASE WHEN outreach_status = 'pending' THEN 1 ELSE 0 END) as pending,
             SUM(CASE WHEN outreach_status = 'sent' THEN 1 ELSE 0 END) as sent,
             SUM(CASE WHEN outreach_status = 'replied' THEN 1 ELSE 0 END) as replied,
-            SUM(CASE WHEN outreach_status = 'meeting' THEN 1 ELSE 0 END) as meeting,
             SUM(CASE WHEN outreach_status = 'converted' THEN 1 ELSE 0 END) as converted
         FROM outreach_contacts
     """)
@@ -1566,11 +1568,11 @@ elif page == "📧 Lead Outreach":
     if not stats.empty:
         col1, col2, col3, col4, col5, col6, col7 = st.columns(7)
         col1.metric("Total Leads", int(stats['total'].iloc[0] or 0))
-        col2.metric("📧 With Email", int(stats['with_email'].iloc[0] or 0))
-        col3.metric("⏳ Pending", int(stats['pending'].iloc[0] or 0))
-        col4.metric("📤 Sent", int(stats['sent'].iloc[0] or 0))
-        col5.metric("💬 Replied", int(stats['replied'].iloc[0] or 0))
-        col6.metric("📅 Meeting", int(stats['meeting'].iloc[0] or 0))
+        col2.metric("🔍 Not Searched", int(stats['not_searched'].iloc[0] or 0))
+        col3.metric("📧 With Email", int(stats['with_email'].iloc[0] or 0))
+        col4.metric("⏳ Pending", int(stats['pending'].iloc[0] or 0))
+        col5.metric("📤 Sent", int(stats['sent'].iloc[0] or 0))
+        col6.metric("💬 Replied", int(stats['replied'].iloc[0] or 0))
         col7.metric("✅ Converted", int(stats['converted'].iloc[0] or 0))
     
     st.divider()
