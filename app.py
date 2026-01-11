@@ -1698,40 +1698,53 @@ elif page == "🧠 Taxonomy":
     # Weaviate connection settings - use env var or fallback to public URL
     WEAVIATE_URL = os.getenv("WEAVIATE_URL", "https://weaviate-production-6822.up.railway.app")
     
-    @st.cache_data(ttl=60)
-    def fetch_taxonomy():
+    @st.cache_data(ttl=60, show_spinner=False)
+    def fetch_taxonomy(weaviate_url: str):
         """Fetch taxonomy data from Weaviate."""
-        try:
-            import requests
-            import json as json_module
-            
-            # GraphQL query for all categories with their dimensions
-            query = """
-            {
-                Get {
-                    TaxonomyCategory {
-                        name
-                        description
-                        dimension_names
-                        dimension_details
-                    }
+        import requests
+        import json as json_module
+        
+        logger.info(f"Fetching taxonomy from: {weaviate_url}")
+        
+        # GraphQL query for all categories with their dimensions
+        query = """
+        {
+            Get {
+                TaxonomyCategory {
+                    name
+                    description
+                    dimension_names
+                    dimension_details
                 }
             }
-            """
-            
+        }
+        """
+        
+        try:
             resp = requests.post(
-                f"{WEAVIATE_URL}/v1/graphql",
+                f"{weaviate_url}/v1/graphql",
                 headers={"Content-Type": "application/json"},
                 json={"query": query},
                 timeout=30
             )
+            logger.info(f"Weaviate response status: {resp.status_code}")
             
             if resp.status_code != 200:
-                logger.error(f"Weaviate query failed: {resp.text}")
-                return [], [], 0, 0, 0
+                logger.error(f"Weaviate query failed: {resp.status_code} - {resp.text[:500]}")
+                return [], [], 0, 0, 0, f"HTTP {resp.status_code}: {resp.text[:200]}"
             
             data = resp.json()
+            
+            # Check for GraphQL errors
+            if "errors" in data:
+                logger.error(f"GraphQL errors: {data['errors']}")
+                return [], [], 0, 0, 0, f"GraphQL error: {data['errors']}"
+            
             categories = data.get('data', {}).get('Get', {}).get('TaxonomyCategory', [])
+            logger.info(f"Found {len(categories)} categories")
+            
+            if not categories:
+                return [], [], 0, 0, 0, "No categories found in Weaviate"
             
             # Build relationships from denormalized data
             relationships = []
@@ -1743,8 +1756,8 @@ elif page == "🧠 Taxonomy":
                 if cat.get('dimension_details'):
                     try:
                         dims = json_module.loads(cat['dimension_details'])
-                    except:
-                        pass
+                    except Exception as parse_err:
+                        logger.warning(f"Failed to parse dimensions for {cat_name}: {parse_err}")
                 
                 for dim in dims:
                     dim_name = dim.get('name', 'Unknown')
@@ -1760,21 +1773,32 @@ elif page == "🧠 Taxonomy":
             dim_count = len(dim_set)
             rel_count = len(relationships)
             
+            logger.info(f"Taxonomy loaded: {cat_count} categories, {dim_count} dimensions, {rel_count} relationships")
+            
             # No hierarchy in Weaviate (flat structure)
             hierarchy = []
             
-            return relationships, hierarchy, cat_count, dim_count, rel_count
+            return relationships, hierarchy, cat_count, dim_count, rel_count, None
+            
+        except requests.exceptions.Timeout:
+            logger.error("Weaviate request timed out")
+            return [], [], 0, 0, 0, "Request timed out (30s)"
+        except requests.exceptions.ConnectionError as e:
+            logger.error(f"Connection error to Weaviate: {e}")
+            return [], [], 0, 0, 0, f"Connection error: {e}"
         except Exception as e:
-            logger.error(f"Failed to fetch taxonomy: {e}")
-            return [], [], 0, 0, 0
+            logger.exception(f"Failed to fetch taxonomy: {e}")
+            return [], [], 0, 0, 0, f"Error: {e}"
     
     # Fetch data
     with st.spinner("Loading taxonomy from Weaviate..."):
-        relationships, hierarchy, cat_count, dim_count, rel_count = fetch_taxonomy()
+        relationships, hierarchy, cat_count, dim_count, rel_count, error = fetch_taxonomy(WEAVIATE_URL)
     
-    if not relationships and not hierarchy:
+    if error or (not relationships and not hierarchy):
         st.error("❌ Could not connect to Weaviate or no data found")
         st.code(f"URL: {WEAVIATE_URL}")
+        if error:
+            st.error(f"Error details: {error}")
         st.stop()
     
     # Stats row
