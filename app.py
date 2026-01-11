@@ -1695,8 +1695,8 @@ elif page == "🧠 Taxonomy":
     st.title("🧠 Product Taxonomy")
     st.caption("Interactive visualization of Weaviate category → dimension graph")
     
-    # Weaviate connection settings (internal Railway network)
-    WEAVIATE_URL = "http://weaviate.railway.internal:8080"
+    # Weaviate connection settings - use env var or fallback to public URL
+    WEAVIATE_URL = os.getenv("WEAVIATE_URL", "https://weaviate-production-6822.up.railway.app")
     
     @st.cache_data(ttl=60)
     def fetch_taxonomy():
