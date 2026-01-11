@@ -1753,15 +1753,33 @@ elif page == "🧠 Taxonomy":
             for cat in categories:
                 cat_name = cat.get('name', 'Unknown')
                 dims = []
+                
+                # Try dimension_details first (JSON array of objects)
                 if cat.get('dimension_details'):
                     try:
-                        dims = json_module.loads(cat['dimension_details'])
+                        parsed = json_module.loads(cat['dimension_details'])
+                        if isinstance(parsed, list):
+                            dims = parsed
                     except Exception as parse_err:
-                        logger.warning(f"Failed to parse dimensions for {cat_name}: {parse_err}")
+                        logger.warning(f"Failed to parse dimension_details for {cat_name}: {parse_err}")
+                
+                # Fallback to dimension_names if no details (array of strings)
+                if not dims and cat.get('dimension_names'):
+                    dim_names = cat['dimension_names']
+                    if isinstance(dim_names, list):
+                        dims = [{"name": n, "description": ""} for n in dim_names if isinstance(n, str)]
                 
                 for dim in dims:
-                    dim_name = dim.get('name', 'Unknown')
-                    dim_desc = dim.get('description', '')
+                    # Handle both dict and string formats
+                    if isinstance(dim, dict):
+                        dim_name = dim.get('name', 'Unknown')
+                        dim_desc = dim.get('description', '')
+                    elif isinstance(dim, str):
+                        dim_name = dim
+                        dim_desc = ''
+                    else:
+                        continue
+                    
                     relationships.append({
                         "category": cat_name,
                         "dimension": dim_name,
