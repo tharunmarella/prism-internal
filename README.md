@@ -11,7 +11,7 @@ A Streamlit dashboard to monitor, explore, and manage the Prism product database
 | 🔍 **Semantic Search** | AI-powered product search with vector embeddings |
 | 📬 **Queues** | Monitor RabbitMQ queues, DLQ, active jobs with progress |
 | 📧 **Lead Outreach** | Manage outreach contacts, send AI-generated preview emails |
-| 🧬 **Taxonomy** | Visualize Neo4j category/dimension graph with vis.js |
+| 🧬 **Taxonomy** | Visualize Weaviate category/dimension data with vis.js |
 | 🛍️ **Products** | Search, filter, export products as CSV |
 | 🏪 **Store** | Visual product catalog with detail view |
 | 🖼️ **Images** | Product image gallery with thumbnails |
@@ -205,7 +205,7 @@ Manage outreach to potential merchant customers:
 - Auto-scheduler sends one email every 5 minutes
 
 ### 🧬 Taxonomy
-Visualize the Neo4j product taxonomy:
+Visualize the Weaviate product taxonomy:
 
 - Interactive graph visualization using vis.js
 - Categories (blue nodes) and Dimensions (green nodes)

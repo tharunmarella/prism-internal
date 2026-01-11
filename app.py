@@ -1693,56 +1693,88 @@ elif page == "🗑️ Clear Data":
 # Taxonomy Visualization Page
 elif page == "🧠 Taxonomy":
     st.title("🧠 Product Taxonomy")
-    st.caption("Interactive visualization of Neo4j category → dimension graph")
+    st.caption("Interactive visualization of Weaviate category → dimension graph")
     
-    # Neo4j connection settings (hardcoded for internal use)
-    NEO4J_URI = "bolt://yamabiko.proxy.rlwy.net:53674"
-    NEO4J_USER = "neo4j"
-    NEO4J_PASSWORD = "t8xa8rt45go64uwpn6mt8552yp8vlpul"
+    # Weaviate connection settings
+    WEAVIATE_URL = "https://weaviate-production-6822.up.railway.app"
     
     @st.cache_data(ttl=60)
     def fetch_taxonomy():
-        """Fetch taxonomy data from Neo4j."""
+        """Fetch taxonomy data from Weaviate."""
         try:
-            from neo4j import GraphDatabase
+            import requests
+            import json as json_module
             
-            driver = GraphDatabase.driver(NEO4J_URI, auth=(NEO4J_USER, NEO4J_PASSWORD))
+            # GraphQL query for all categories with their dimensions
+            query = """
+            {
+                Get {
+                    TaxonomyCategory {
+                        name
+                        description
+                        dimension_names
+                        dimension_details
+                    }
+                }
+            }
+            """
             
-            with driver.session() as session:
-                # Get all categories and dimensions with REQUIRES relationships
-                result = session.run("""
-                    MATCH (c:Category)-[r:REQUIRES]->(d:Dimension)
-                    RETURN c.name AS category, d.name AS dimension, d.description AS description
-                    ORDER BY c.name, d.name
-                """)
-                relationships = [dict(record) for record in result]
+            resp = requests.post(
+                f"{WEAVIATE_URL}/v1/graphql",
+                headers={"Content-Type": "application/json"},
+                json={"query": query},
+                timeout=30
+            )
+            
+            if resp.status_code != 200:
+                logger.error(f"Weaviate query failed: {resp.text}")
+                return [], [], 0, 0, 0
+            
+            data = resp.json()
+            categories = data.get('data', {}).get('Get', {}).get('TaxonomyCategory', [])
+            
+            # Build relationships from denormalized data
+            relationships = []
+            dim_set = set()
+            
+            for cat in categories:
+                cat_name = cat.get('name', 'Unknown')
+                dims = []
+                if cat.get('dimension_details'):
+                    try:
+                        dims = json_module.loads(cat['dimension_details'])
+                    except:
+                        pass
                 
-                # Get category hierarchy (IS_A relationships)
-                hierarchy_result = session.run("""
-                    MATCH (child:Category)-[:IS_A]->(parent:Category)
-                    RETURN child.name AS child, parent.name AS parent
-                    ORDER BY parent.name, child.name
-                """)
-                hierarchy = [dict(record) for record in hierarchy_result]
-                
-                # Get stats
-                cat_count = session.run("MATCH (c:Category) RETURN count(c) as count").single()["count"]
-                dim_count = session.run("MATCH (d:Dimension) RETURN count(d) as count").single()["count"]
-                rel_count = session.run("MATCH ()-[r:REQUIRES]->() RETURN count(r) as count").single()["count"]
-                
-            driver.close()
+                for dim in dims:
+                    dim_name = dim.get('name', 'Unknown')
+                    dim_desc = dim.get('description', '')
+                    relationships.append({
+                        "category": cat_name,
+                        "dimension": dim_name,
+                        "description": dim_desc
+                    })
+                    dim_set.add(dim_name)
+            
+            cat_count = len(categories)
+            dim_count = len(dim_set)
+            rel_count = len(relationships)
+            
+            # No hierarchy in Weaviate (flat structure)
+            hierarchy = []
+            
             return relationships, hierarchy, cat_count, dim_count, rel_count
         except Exception as e:
             logger.error(f"Failed to fetch taxonomy: {e}")
             return [], [], 0, 0, 0
     
     # Fetch data
-    with st.spinner("Loading taxonomy from Neo4j..."):
+    with st.spinner("Loading taxonomy from Weaviate..."):
         relationships, hierarchy, cat_count, dim_count, rel_count = fetch_taxonomy()
     
     if not relationships and not hierarchy:
-        st.error("❌ Could not connect to Neo4j or no data found")
-        st.code(f"URI: {NEO4J_URI}")
+        st.error("❌ Could not connect to Weaviate or no data found")
+        st.code(f"URL: {WEAVIATE_URL}")
         st.stop()
     
     # Stats row
@@ -2050,151 +2082,6 @@ elif page == "🧠 Taxonomy":
             st.caption(", ".join(cats[:5]) + ("..." if len(cats) > 5 else ""))
     else:
         st.info("No shared dimensions found")
-
-
-# Taxonomy Visualization Page
-elif page == "🧠 Taxonomy":
-    st.title("🧠 Product Taxonomy")
-    st.caption("Interactive visualization of Neo4j category → dimension graph")
-    
-    # Neo4j connection settings (hardcoded for internal use)
-    NEO4J_URI = "bolt://yamabiko.proxy.rlwy.net:53674"
-    NEO4J_USER = "neo4j"
-    NEO4J_PASSWORD = "t8xa8rt45go64uwpn6mt8552yp8vlpul"
-    
-    @st.cache_data(ttl=60)
-    def fetch_taxonomy():
-        """Fetch taxonomy data from Neo4j."""
-        try:
-            from neo4j import GraphDatabase
-            
-            driver = GraphDatabase.driver(NEO4J_URI, auth=(NEO4J_USER, NEO4J_PASSWORD))
-            
-            with driver.session() as session:
-                result = session.run("""
-                    MATCH (c:Category)-[r:REQUIRES]->(d:Dimension)
-                    RETURN c.name AS category, d.name AS dimension, d.description AS description
-                    ORDER BY c.name, d.name
-                """)
-                relationships = [dict(record) for record in result]
-                
-                cat_count = session.run("MATCH (c:Category) RETURN count(c) as count").single()["count"]
-                dim_count = session.run("MATCH (d:Dimension) RETURN count(d) as count").single()["count"]
-                rel_count = session.run("MATCH ()-[r:REQUIRES]->() RETURN count(r) as count").single()["count"]
-                
-            driver.close()
-            return relationships, cat_count, dim_count, rel_count
-        except Exception as e:
-            logger.error(f"Failed to fetch taxonomy: {e}")
-            return [], 0, 0, 0
-    
-    with st.spinner("Loading taxonomy from Neo4j..."):
-        relationships, cat_count, dim_count, rel_count = fetch_taxonomy()
-    
-    if not relationships:
-        st.error("❌ Could not connect to Neo4j or no data found")
-        st.code(f"URI: {NEO4J_URI}")
-        st.stop()
-    
-    col1, col2, col3 = st.columns(3)
-    col1.metric("Categories", cat_count)
-    col2.metric("Dimensions", dim_count)
-    col3.metric("Relationships", rel_count)
-    
-    st.divider()
-    
-    # Build graph data
-    from collections import defaultdict
-    import json as json_lib
-    
-    nodes = []
-    edges = []
-    node_ids = set()
-    cat_dims = defaultdict(list)
-    dim_descriptions = {}
-    
-    for rel in relationships:
-        cat = rel["category"]
-        dim = rel["dimension"]
-        desc = rel.get("description", "")
-        cat_dims[cat].append(dim)
-        dim_descriptions[dim] = desc
-        
-        if f"cat_{cat}" not in node_ids:
-            nodes.append({"id": f"cat_{cat}", "label": cat, "group": "category", "title": f"Category: {cat}"})
-            node_ids.add(f"cat_{cat}")
-        
-        if f"dim_{dim}" not in node_ids:
-            label = dim[:20] + "..." if len(dim) > 20 else dim
-            nodes.append({"id": f"dim_{dim}", "label": label, "group": "dimension", "title": f"{dim}: {desc[:80] if desc else 'No description'}"})
-            node_ids.add(f"dim_{dim}")
-        
-        edges.append({"from": f"cat_{cat}", "to": f"dim_{dim}"})
-    
-    nodes_json = json_lib.dumps(nodes)
-    edges_json = json_lib.dumps(edges)
-    
-    vis_html = f"""
-    <html>
-    <head>
-        <script src="https://unpkg.com/vis-network/standalone/umd/vis-network.min.js"></script>
-        <style>#graph {{ width: 100%; height: 550px; border: 1px solid #333; border-radius: 8px; background: #1a1a2e; }}</style>
-    </head>
-    <body style="margin: 0; background: #0e1117;">
-        <div id="graph"></div>
-        <script>
-            var nodes = new vis.DataSet({nodes_json});
-            var edges = new vis.DataSet({edges_json});
-            var container = document.getElementById('graph');
-            var data = {{ nodes: nodes, edges: edges }};
-            var options = {{
-                nodes: {{ font: {{ color: '#fff', size: 12 }}, borderWidth: 2, shadow: true }},
-                edges: {{ color: {{ color: '#666', highlight: '#00d4ff' }}, width: 1, smooth: {{ type: 'continuous' }} }},
-                groups: {{
-                    parent: {{ color: {{ background: '#f59e0b', border: '#d97706' }}, shape: 'box', font: {{ size: 16, color: '#fff', bold: true }} }},
-                    category: {{ color: {{ background: '#6366f1', border: '#4f46e5' }}, shape: 'box', font: {{ size: 14, color: '#fff' }} }},
-                    dimension: {{ color: {{ background: '#10b981', border: '#059669' }}, shape: 'ellipse', font: {{ size: 11, color: '#fff' }} }}
-                }},
-                physics: {{ barnesHut: {{ gravitationalConstant: -3000, centralGravity: 0.3, springLength: 120 }}, stabilization: {{ iterations: 150 }} }},
-                interaction: {{ hover: true, tooltipDelay: 100, zoomView: true, dragView: true }}
-            }};
-            var network = new vis.Network(container, data, options);
-            network.once('stabilizationIterationsDone', function() {{ network.fit(); }});
-        </script>
-    </body>
-    </html>
-    """
-    
-    st.subheader("🌐 Interactive Graph")
-    st.caption("🟠 Parent Categories | 🟣 Categories | 🟢 Dimensions | Dashed lines = hierarchy")
-    
-    import streamlit.components.v1 as components
-    components.html(vis_html, height=570)
-    
-    st.divider()
-    st.subheader("📁 Category Browser")
-    
-    selected_cat = st.selectbox("Select a category", sorted(cat_dims.keys()))
-    if selected_cat:
-        dims = cat_dims[selected_cat]
-        st.write(f"**{selected_cat}** has **{len(dims)} dimensions**:")
-        for dim in dims:
-            with st.expander(dim):
-                st.write(dim_descriptions.get(dim, "No description"))
-    
-    st.divider()
-    st.subheader("🔄 Most Shared Dimensions")
-    
-    dim_usage = defaultdict(list)
-    for rel in relationships:
-        dim_usage[rel["dimension"]].append(rel["category"])
-    
-    shared = [(dim, cats) for dim, cats in dim_usage.items() if len(cats) > 1]
-    shared.sort(key=lambda x: -len(x[1]))
-    
-    for dim, cats in shared[:10]:
-        st.write(f"**{dim}** → {len(cats)} categories")
-        st.caption(", ".join(cats[:5]) + ("..." if len(cats) > 5 else ""))
 
 
 # Footer
