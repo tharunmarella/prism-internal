@@ -1696,9 +1696,14 @@ elif page == "🧠 Taxonomy":
     st.caption("Interactive visualization of Neo4j category hierarchy + dimensions")
     
     # Neo4j connection settings
-    NEO4J_URI = os.getenv("NEO4J_URI", "bolt://yamabiko.proxy.rlwy.net:53674")
+    # Use external proxy URL for Railway deployments
+    NEO4J_URI = os.getenv("NEO4J_URI") or os.getenv("NEO4J_EXTERNAL_URI", "bolt://yamabiko.proxy.rlwy.net:53674")
     NEO4J_USER = os.getenv("NEO4J_USER", "neo4j")
     NEO4J_PASSWORD = os.getenv("NEO4J_PASSWORD", "t8xa8rt45go64uwpn6mt8552yp8vlpul")
+    
+    # Fix: if URI is internal Railway URI, replace with external proxy
+    if "railway.internal" in NEO4J_URI:
+        NEO4J_URI = "bolt://yamabiko.proxy.rlwy.net:53674"
     
     @st.cache_data(ttl=60)
     def fetch_taxonomy():
