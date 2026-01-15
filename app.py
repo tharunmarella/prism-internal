@@ -1693,137 +1693,97 @@ elif page == "🗑️ Clear Data":
 # Taxonomy Visualization Page
 elif page == "🧠 Taxonomy":
     st.title("🧠 Product Taxonomy")
-    st.caption("Interactive visualization of Weaviate category → dimension graph")
+    st.caption("Interactive visualization of Neo4j category hierarchy + dimensions")
     
-    # Weaviate connection settings - use env var or fallback to public URL
-    WEAVIATE_URL = os.getenv("WEAVIATE_URL", "https://weaviate-production-6822.up.railway.app")
+    # Neo4j connection settings
+    NEO4J_URI = os.getenv("NEO4J_URI", "bolt://yamabiko.proxy.rlwy.net:53674")
+    NEO4J_USER = os.getenv("NEO4J_USER", "neo4j")
+    NEO4J_PASSWORD = os.getenv("NEO4J_PASSWORD", "t8xa8rt45go64uwpn6mt8552yp8vlpul")
     
-    @st.cache_data(ttl=60, show_spinner=False)
-    def fetch_taxonomy(weaviate_url: str):
-        """Fetch taxonomy data from Weaviate."""
-        import requests
-        import json as json_module
-        
-        logger.info(f"Fetching taxonomy from: {weaviate_url}")
-        
-        # GraphQL query for all categories with their dimensions
-        query = """
-        {
-            Get {
-                TaxonomyCategory {
-                    name
-                    description
-                    dimension_names
-                    dimension_details
-                }
-            }
-        }
-        """
-        
+    @st.cache_data(ttl=60)
+    def fetch_taxonomy():
+        """Fetch taxonomy data from Neo4j."""
         try:
-            resp = requests.post(
-                f"{weaviate_url}/v1/graphql",
-                headers={"Content-Type": "application/json"},
-                json={"query": query},
-                timeout=30
-            )
-            logger.info(f"Weaviate response status: {resp.status_code}")
+            from neo4j import GraphDatabase
             
-            if resp.status_code != 200:
-                logger.error(f"Weaviate query failed: {resp.status_code} - {resp.text[:500]}")
-                return [], [], 0, 0, 0, f"HTTP {resp.status_code}: {resp.text[:200]}"
+            driver = GraphDatabase.driver(NEO4J_URI, auth=(NEO4J_USER, NEO4J_PASSWORD))
             
-            data = resp.json()
-            
-            # Check for GraphQL errors
-            if "errors" in data:
-                logger.error(f"GraphQL errors: {data['errors']}")
-                return [], [], 0, 0, 0, f"GraphQL error: {data['errors']}"
-            
-            categories = data.get('data', {}).get('Get', {}).get('TaxonomyCategory', [])
-            logger.info(f"Found {len(categories)} categories")
-            
-            if not categories:
-                return [], [], 0, 0, 0, "No categories found in Weaviate"
-            
-            # Build relationships from denormalized data
-            relationships = []
-            dim_set = set()
-            
-            for cat in categories:
-                cat_name = cat.get('name', 'Unknown')
-                dims = []
+            with driver.session() as session:
+                # Get all categories with their dimensions and parent relationships
+                result = session.run("""
+                    MATCH (c:Category)
+                    OPTIONAL MATCH (c)-[:CHILD_OF]->(parent:Category)
+                    RETURN c.name as name, 
+                           c.level as level,
+                           c.description as description,
+                           c.dimension_names as dimension_names,
+                           parent.name as parent_name
+                    ORDER BY c.level, c.name
+                """)
                 
-                # Try dimension_details first (JSON array of objects)
-                if cat.get('dimension_details'):
-                    try:
-                        parsed = json_module.loads(cat['dimension_details'])
-                        if isinstance(parsed, list):
-                            dims = parsed
-                    except Exception as parse_err:
-                        logger.warning(f"Failed to parse dimension_details for {cat_name}: {parse_err}")
+                categories = []
+                hierarchy = []
+                relationships = []
+                dim_set = set()
                 
-                # Fallback to dimension_names if no details (array of strings)
-                if not dims and cat.get('dimension_names'):
-                    dim_names = cat['dimension_names']
-                    if isinstance(dim_names, list):
-                        dims = [{"name": n, "description": ""} for n in dim_names if isinstance(n, str)]
-                
-                for dim in dims:
-                    # Handle both dict and string formats
-                    if isinstance(dim, dict):
-                        dim_name = dim.get('name', 'Unknown')
-                        dim_desc = dim.get('description', '')
-                    elif isinstance(dim, str):
-                        dim_name = dim
-                        dim_desc = ''
-                    else:
-                        continue
+                for record in result:
+                    cat_name = record['name']
+                    level = record['level']
+                    dims = record['dimension_names'] or []
+                    parent = record['parent_name']
                     
-                    relationships.append({
-                        "category": cat_name,
-                        "dimension": dim_name,
-                        "description": dim_desc
+                    categories.append({
+                        'name': cat_name,
+                        'level': level,
+                        'parent': parent
                     })
-                    dim_set.add(dim_name)
+                    
+                    # Build hierarchy edges
+                    if parent:
+                        hierarchy.append({
+                            'parent': parent,
+                            'child': cat_name
+                        })
+                    
+                    # Build dimension relationships
+                    for dim in dims:
+                        relationships.append({
+                            'category': cat_name,
+                            'dimension': dim,
+                            'description': ''
+                        })
+                        dim_set.add(dim)
+                
+                # Get relationship count
+                rel_result = session.run("MATCH ()-[r:CHILD_OF]->() RETURN count(r) as count")
+                hierarchy_count = rel_result.single()['count']
+            
+            driver.close()
             
             cat_count = len(categories)
             dim_count = len(dim_set)
             rel_count = len(relationships)
             
-            logger.info(f"Taxonomy loaded: {cat_count} categories, {dim_count} dimensions, {rel_count} relationships")
-            
-            # No hierarchy in Weaviate (flat structure)
-            hierarchy = []
-            
-            return relationships, hierarchy, cat_count, dim_count, rel_count, None
-            
-        except requests.exceptions.Timeout:
-            logger.error("Weaviate request timed out")
-            return [], [], 0, 0, 0, "Request timed out (30s)"
-        except requests.exceptions.ConnectionError as e:
-            logger.error(f"Connection error to Weaviate: {e}")
-            return [], [], 0, 0, 0, f"Connection error: {e}"
+            return relationships, hierarchy, cat_count, dim_count, rel_count, hierarchy_count
         except Exception as e:
-            logger.exception(f"Failed to fetch taxonomy: {e}")
-            return [], [], 0, 0, 0, f"Error: {e}"
+            logger.error(f"Failed to fetch taxonomy from Neo4j: {e}")
+            return [], [], 0, 0, 0, 0
     
     # Fetch data
-    with st.spinner("Loading taxonomy from Weaviate..."):
-        relationships, hierarchy, cat_count, dim_count, rel_count, error = fetch_taxonomy(WEAVIATE_URL)
+    with st.spinner("Loading taxonomy from Neo4j..."):
+        relationships, hierarchy, cat_count, dim_count, rel_count, hierarchy_count = fetch_taxonomy()
     
-    if error or (not relationships and not hierarchy):
-        st.error("❌ Could not connect to Weaviate or no data found")
-        st.code(f"URL: {WEAVIATE_URL}")
-        if error:
-            st.error(f"Error details: {error}")
+    if not relationships and not hierarchy:
+        st.error("❌ Could not connect to Neo4j or no data found")
+        st.code(f"URI: {NEO4J_URI}")
         st.stop()
     
     # Stats row
-    col1, col2, col3 = st.columns(3)
+    col1, col2, col3, col4 = st.columns(4)
     col1.metric("Categories", cat_count)
     col2.metric("Dimensions", dim_count)
-    col3.metric("Relationships", rel_count)
+    col3.metric("Dim Assignments", rel_count)
+    col4.metric("Hierarchy Links", hierarchy_count)
     
     st.divider()
     
@@ -1979,6 +1939,7 @@ elif page == "🧠 Taxonomy":
             .legend-dot {{ width: 12px; height: 12px; border-radius: 3px; }}
             .cat-dot {{ background: #6366f1; }}
             .dim-dot {{ background: #10b981; border-radius: 50%; }}
+            .parent-dot {{ background: #f59e0b; }}
         </style>
     </head>
     <body>
@@ -1992,8 +1953,10 @@ elif page == "🧠 Taxonomy":
                 </button>
             </div>
             <div id="legend">
+                <div class="legend-item"><div class="legend-dot parent-dot"></div> Parent Categories</div>
                 <div class="legend-item"><div class="legend-dot cat-dot"></div> Categories ({cat_count})</div>
                 <div class="legend-item"><div class="legend-dot dim-dot"></div> Dimensions ({dim_count})</div>
+                <div class="legend-item">── Hierarchy ({hierarchy_count} links)</div>
             </div>
             <div id="graph"></div>
         </div>
@@ -2016,6 +1979,11 @@ elif page == "🧠 Taxonomy":
                     smooth: {{ type: 'continuous' }}
                 }},
                 groups: {{
+                    parent: {{
+                        color: {{ background: '#f59e0b', border: '#d97706' }},
+                        shape: 'box',
+                        font: {{ size: 16, color: '#ffffff', bold: true }}
+                    }},
                     category: {{
                         color: {{ background: '#6366f1', border: '#4f46e5' }},
                         shape: 'box',
